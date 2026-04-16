@@ -1,0 +1,8 @@
+============================================================
+  device_name: WAREHOUSE-MAIN
+  role:        warehouse
+  device_uuid: 4508a1e7-51d8-47bc-a885-eba86c270a91
+  api_key:     31mJH6zLKg4YwgX5N7kgqXlKAHdngGjH0M5pOAO7qmU
+============================================================
+SAVE THIS API KEY NOW — it is not stored in plain and cannot be
+recovered. Give it to the device's sync setup dialog.

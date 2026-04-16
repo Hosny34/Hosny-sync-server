@@ -1,0 +1,8 @@
+============================================================
+  device_name: POS-01
+  role:        pos
+  device_uuid: 73d7b907-360e-4069-a9df-ac1993b9c73c
+  api_key:     RDJyzl8NWhcQEFRukPFHNK575ikbmSVb3PEyAe5xUWQ
+============================================================
+SAVE THIS API KEY NOW — it is not stored in plain and cannot be
+recovered. Give it to the device's sync setup dialog.

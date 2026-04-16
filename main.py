@@ -1,115 +1,224 @@
-import os
-from fastapi import FastAPI
-from pydantic import BaseModel
-from typing import List, Optional
-from uuid import uuid4
-from datetime import datetime, timezone
-import psycopg2
+# -*- coding: utf-8 -*-
+"""Sync server — FastAPI routes.
+
+Endpoints:
+    GET  /v1/health
+    POST /v1/auth/token       {device_name, api_key} -> {access_token, expires_in}
+    POST /v1/sync/push        {events: [...]}        -> {accepted, duplicates}
+    GET  /v1/sync/pull        ?since=<seq>&limit=<n> -> {events, next_seq}
+    GET  /v1/sync/status      (warehouse only)       -> device list
+"""
+
+from __future__ import annotations
+
 import json
+from datetime import datetime, timezone
+from typing import Any, Dict, List, Optional
 
-app = FastAPI()
+from fastapi import Depends, FastAPI, Header, HTTPException, Query
+from fastapi.responses import JSONResponse
+from pydantic import BaseModel, Field
 
-DATABASE_URL = os.getenv("DATABASE_URL")
+from config import MAX_PULL_BATCH, MAX_PUSH_BATCH
+import auth
+import db
 
-def get_conn():
-    return psycopg2.connect(DATABASE_URL)
 
-def utc_now():
-    return datetime.now(timezone.utc).isoformat()
+app = FastAPI(title="HosnyWarehouse Sync Server", version="0.2.0")
+
+
+def _utc_now_iso() -> str:
+    return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.%fZ")
+
+
+@app.on_event("startup")
+def _startup() -> None:
+    db.init_schema()
+
+
+# ------------------------------- Schemas ------------------------------- #
+
+class TokenRequest(BaseModel):
+    device_name: str
+    api_key: Optional[str] = None
+
+
+class TokenResponse(BaseModel):
+    access_token: str
+    token_type: str
 
 
 class EventIn(BaseModel):
     event_uuid: str
     event_type: str
-    source_device: str
-    target_scope: str
-    payload: dict
+    payload: Dict[str, Any] = Field(default_factory=dict)
+    # target_scope is optional — if the client doesn't set it, the
+    # server derives it from the caller's role: POS → 'warehouse',
+    # warehouse → 'all-pos'. Clients may override (e.g. warehouse
+    # targeting a specific POS with 'pos:POS-03').
+    target_scope: Optional[str] = None
+    created_at: Optional[str] = None
 
 
 class PushRequest(BaseModel):
     events: List[EventIn]
 
 
-@app.on_event("startup")
-def startup():
-    conn = get_conn()
-    cur = conn.cursor()
-
-    cur.execute("""
-    CREATE TABLE IF NOT EXISTS events (
-        server_seq SERIAL PRIMARY KEY,
-        event_uuid TEXT UNIQUE,
-        event_type TEXT,
-        source_device TEXT,
-        target_scope TEXT,
-        payload JSONB,
-        created_at TIMESTAMP DEFAULT NOW()
-    );
-    """)
-
-    conn.commit()
-    cur.close()
-    conn.close()
+class PushResponse(BaseModel):
+    accepted: int
+    duplicates: int
+    received: int
 
 
-@app.get("/")
-def root():
-    return {"ok": True}
+class PullResponse(BaseModel):
+    events: List[Dict[str, Any]]
+    next_seq: int
+    server_time: str
 
 
-@app.post("/v1/sync/push")
-def push(req: PushRequest):
-    conn = get_conn()
-    cur = conn.cursor()
+# ------------------------------- Auth dep ------------------------------ #
 
-    inserted = 0
-
-    for e in req.events:
-        try:
-            cur.execute("""
-            INSERT INTO events (event_uuid, event_type, source_device, target_scope, payload)
-            VALUES (%s, %s, %s, %s, %s)
-            ON CONFLICT (event_uuid) DO NOTHING;
-            """, (e.event_uuid, e.event_type, e.source_device, e.target_scope, json.dumps(e.payload)))
-            inserted += 1
-        except:
-            pass
-
-    conn.commit()
-    cur.close()
-    conn.close()
-
-    return {"ok": True, "inserted": inserted}
+def current_device(authorization: Optional[str] = Header(None)) -> Dict[str, Any]:
+    if not authorization or not authorization.lower().startswith("bearer "):
+        raise HTTPException(status_code=401, detail="missing bearer token")
+    token = authorization.split(None, 1)[1].strip()
+    try:
+        return auth.decode_jwt(token)
+    except auth.AuthError as e:
+        raise HTTPException(status_code=401, detail=str(e))
 
 
-@app.get("/v1/sync/pull")
-def pull(since: int = 0):
-    conn = get_conn()
-    cur = conn.cursor()
+def warehouse_only(device: Dict[str, Any] = Depends(current_device)) -> Dict[str, Any]:
+    if device["role"] != "warehouse":
+        raise HTTPException(status_code=403, detail="warehouse role required")
+    return device
 
-    cur.execute("""
-    SELECT server_seq, event_uuid, event_type, payload
-    FROM events
-    WHERE server_seq > %s
-    ORDER BY server_seq ASC
-    LIMIT 100;
-    """, (since,))
 
-    rows = cur.fetchall()
+# ------------------------------- Routes -------------------------------- #
 
-    events = []
-    last_seq = since
+@app.get("/v1/health")
+def health() -> Dict[str, Any]:
+    return {"status": "ok", "server_time": _utc_now_iso()}
 
+
+@app.post("/v1/auth/token", response_model=TokenResponse)
+def issue_token(body: TokenRequest) -> TokenResponse:
+    device_name = (body.device_name or "").strip()
+    if not device_name:
+        raise HTTPException(status_code=422, detail="device_name is required")
+
+    # Compatibility mode:
+    # - If api_key is provided and valid, issue the classic registered-device JWT.
+    # - Otherwise, issue a simple stateless device JWT (no DB auth required).
+    if body.api_key:
+        dev = auth.authenticate_device(device_name, body.api_key)
+        if dev is None:
+            raise HTTPException(status_code=401, detail="invalid device or key")
+        token, _ = auth.issue_jwt(dev)
+    else:
+        token, _ = auth.issue_simple_device_jwt(device_name)
+
+    return TokenResponse(
+        access_token=token,
+        token_type="bearer",
+    )
+
+
+def _default_scope_for(role: str) -> str:
+    """If client omits target_scope, pick a sensible default.
+
+    - warehouse-originated events default to fan-out to all POS devices.
+    - pos-originated events default to the warehouse.
+    """
+    if role == "warehouse":
+        return "all-pos"
+    if role == "pos":
+        return "warehouse"
+    return "all"
+
+
+@app.post("/v1/sync/push", response_model=PushResponse)
+def sync_push(
+    body: PushRequest,
+    device: Dict[str, Any] = Depends(current_device),
+) -> PushResponse:
+    if len(body.events) > MAX_PUSH_BATCH:
+        raise HTTPException(
+            status_code=413,
+            detail=f"too many events in one push (limit {MAX_PUSH_BATCH})",
+        )
+
+    rows = []
+    for ev in body.events:
+        # Server-enforced: source_device is ALWAYS the caller. Clients
+        # cannot forge events as other devices.
+        scope = (ev.target_scope or _default_scope_for(device["role"])).strip()
+        rows.append(
+            (
+                ev.event_uuid,
+                ev.event_type,
+                device["device_uuid"],
+                scope,
+                json.dumps(ev.payload, ensure_ascii=False, default=str),
+                ev.created_at or _utc_now_iso(),
+            )
+        )
+
+    inserted = db.insert_events(rows)
+    return PushResponse(
+        received=len(body.events),
+        accepted=inserted,
+        duplicates=len(body.events) - inserted,
+    )
+
+
+@app.get("/v1/sync/pull", response_model=PullResponse)
+def sync_pull(
+    since: int = Query(0, ge=0),
+    limit: int = Query(MAX_PULL_BATCH, ge=1, le=MAX_PULL_BATCH),
+    device: Dict[str, Any] = Depends(current_device),
+) -> PullResponse:
+    scopes = auth.allowed_scopes_for_pull(device["device_name"], device["role"])
+    rows = db.pull_events(scopes=scopes, since_seq=since, limit=limit)
+
+    # Parse payloads back for the wire.
+    events: List[Dict[str, Any]] = []
+    max_seq = since
     for r in rows:
+        try:
+            payload_obj = json.loads(r["payload"])
+        except Exception:
+            payload_obj = {"_raw": r["payload"]}
         events.append({
-            "server_seq": r[0],
-            "event_uuid": r[1],
-            "event_type": r[2],
-            "payload": r[3]
+            "server_seq": int(r["server_seq"]),
+            "event_uuid": r["event_uuid"],
+            "event_type": r["event_type"],
+            "source_device": r["source_device"],
+            "target_scope": r["target_scope"],
+            "payload": payload_obj,
+            "created_at": r["created_at"],
         })
-        last_seq = r[0]
+        if int(r["server_seq"]) > max_seq:
+            max_seq = int(r["server_seq"])
 
-    cur.close()
-    conn.close()
+    if events:
+        db.update_cursor(
+            device_uuid=device["device_uuid"],
+            channel="main",
+            last_pulled_seq=max_seq,
+            now_iso=_utc_now_iso(),
+        )
 
-    return {"events": events, "next_seq": last_seq}
+    return PullResponse(
+        events=events,
+        next_seq=max_seq,
+        server_time=_utc_now_iso(),
+    )
+
+
+@app.get("/v1/sync/status")
+def sync_status(device: Dict[str, Any] = Depends(warehouse_only)) -> Dict[str, Any]:
+    return {
+        "server_time": _utc_now_iso(),
+        "devices": db.device_status_summary(),
+    }
