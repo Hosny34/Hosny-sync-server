@@ -20,10 +20,15 @@ DEFAULT_SQLITE_PATH = BASE_DIR / "sync_server.sqlite3"
 # DATABASE_URL examples:
 #   sqlite:///C:/path/to/sync_server.sqlite3
 #   postgresql://user:password@host:5432/sync_db
-DATABASE_URL: str = os.environ.get(
-    "DATABASE_URL",
-    "sqlite:///" + str(DEFAULT_SQLITE_PATH).replace("\\", "/"),
-)
+#
+# This server currently runs on SQLite only. Railway often injects a
+# Postgres DATABASE_URL by default; if that happens, we gracefully
+# fall back to SQLite instead of crashing at startup.
+_raw_database_url = os.environ.get("DATABASE_URL", "").strip()
+if _raw_database_url.startswith("sqlite:"):
+    DATABASE_URL: str = _raw_database_url
+else:
+    DATABASE_URL = "sqlite:///" + str(DEFAULT_SQLITE_PATH).replace("\\", "/")
 
 # JWT signing secret. MUST be set in production. Falls back to a random
 # value at startup in dev so tokens don't survive a restart.

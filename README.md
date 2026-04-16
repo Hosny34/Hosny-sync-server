@@ -19,8 +19,9 @@ Minimal event-relay hub for the HosnyWarehouse warehouse + POS apps.
 ## Stack
 
 - Python 3.10+, FastAPI, uvicorn
-- SQLite by default (good for dev and small deployments); set
-  `DATABASE_URL` to a Postgres URL to upgrade.
+- SQLite runtime (current implementation). If `DATABASE_URL` is not a
+  SQLite URL, the server falls back to local SQLite to avoid startup
+  crashes on platforms that auto-inject Postgres URLs.
 - PyJWT for bearer tokens.
 
 ## Quick start (dev, SQLite)
@@ -72,7 +73,8 @@ setup dialog along with the server URL (e.g.
   appliers.
 - No monitoring dashboard — stale-branch alerts come in Phase 6.
 
-## Upgrading to Postgres later
+## Notes on Railway
 
-Set `DATABASE_URL=postgresql://user:pass@host/db` and rerun
-`admin_cli.py init`. The SQL is plain vanilla and works on both.
+Railway may auto-provide a Postgres `DATABASE_URL`. This codebase
+currently uses SQLite only, so startup will use local SQLite unless you
+implement a Postgres backend in `db.py`.
