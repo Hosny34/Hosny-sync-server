@@ -77,6 +77,38 @@ def register_device(device_name: str, role: str) -> Tuple[str, str]:
 
 # ---- Token issuance ----
 
+def infer_role_from_device_name(device_name: str) -> str:
+    clean_name = (device_name or "").strip()
+    return "warehouse" if clean_name.lower().startswith("warehouse") else "pos"
+
+
+def ensure_simple_device(device_name: str) -> Dict[str, Any]:
+    """Ensure a simplified auth device exists in the DB.
+
+    The original server design expected every synced event and cursor row
+    to reference a real devices.device_uuid. The simple device-name auth
+    flow therefore provisions a normal device row lazily on first login.
+    """
+    clean_name = device_name.strip()
+    if not clean_name:
+        raise ValueError("device_name is required")
+    role = infer_role_from_device_name(clean_name)
+    existing = db.get_device_by_name(clean_name)
+    if existing is not None:
+        return existing
+
+    device_uuid = str(uuid.uuid4())
+    db.upsert_device(
+        device_uuid=device_uuid,
+        device_name=clean_name,
+        role=role,
+        api_token_hash="",
+        created_at=_now_iso(),
+    )
+    created = db.get_device_by_name(clean_name)
+    assert created is not None
+    return created
+
 def issue_jwt(device_row: Dict[str, Any]) -> Tuple[str, int]:
     """Return (jwt_string, ttl_seconds)."""
     now = int(time.time())
@@ -92,17 +124,18 @@ def issue_jwt(device_row: Dict[str, Any]) -> Tuple[str, int]:
 
 
 def issue_simple_device_jwt(device_name: str) -> Tuple[str, int]:
-    """Issue a stateless JWT from device_name only.
+    """Issue a JWT from device_name, auto-provisioning the device row.
 
     This is used by the simplified `/v1/auth/token` flow required by the
-    desktop client. No DB lookup is needed.
+    desktop client.
     """
     now = int(time.time())
-    clean_name = device_name.strip()
-    role = "warehouse" if clean_name.lower().startswith("warehouse") else "pos"
+    dev = ensure_simple_device(device_name)
     payload = {
-        "device_name": clean_name,
-        "role": role,
+        "sub": dev["device_uuid"],
+        "name": dev["device_name"],
+        "device_name": dev["device_name"],
+        "role": dev["role"],
         "iat": now,
         "exp": now + SIMPLE_TOKEN_TTL_SECONDS,
     }
@@ -134,15 +167,18 @@ def decode_jwt(token: str) -> Dict[str, Any]:
         raise AuthError("token expired")
     except jwt.InvalidTokenError:
         raise AuthError("invalid token")
-    # Stateless fallback mode for simple device-only tokens.
+    # Stateless fallback mode for older simple tokens already issued
+    # before device auto-provisioning was added.
     if "sub" not in payload:
         device_name = str(payload.get("device_name") or payload.get("name") or "").strip()
         if not device_name:
             raise AuthError("invalid token payload")
+        dev = ensure_simple_device(device_name)
+        db.touch_device(dev["device_uuid"], _now_iso())
         return {
-            "device_uuid": str(payload.get("device_uuid") or ""),
-            "device_name": device_name,
-            "role": str(payload.get("role") or "device"),
+            "device_uuid": dev["device_uuid"],
+            "device_name": dev["device_name"],
+            "role": dev["role"],
         }
 
     # Stateful mode: sanity check against registered devices in DB.

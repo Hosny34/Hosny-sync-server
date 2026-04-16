@@ -124,6 +124,36 @@ def insert_device(
         )
 
 
+def upsert_device(
+    device_uuid: str,
+    device_name: str,
+    role: str,
+    api_token_hash: str,
+    created_at: str,
+) -> None:
+    """Create or refresh a device row keyed by device_name.
+
+    This is used by the simplified device-name auth flow so every
+    authenticated client still has a real device_uuid for foreign keys,
+    cursor tracking, and status reporting.
+    """
+    with tx() as conn:
+        conn.execute(
+            """
+            INSERT INTO devices
+                (device_uuid, device_name, role, api_token_hash, created_at)
+            VALUES (?, ?, ?, ?, ?)
+            ON CONFLICT(device_name) DO UPDATE SET
+                role           = excluded.role,
+                api_token_hash = CASE
+                    WHEN devices.api_token_hash = '' THEN excluded.api_token_hash
+                    ELSE devices.api_token_hash
+                END
+            """,
+            (device_uuid, device_name, role, api_token_hash, created_at),
+        )
+
+
 def get_device_by_name(name: str) -> Optional[Dict[str, Any]]:
     row = get_conn().execute(
         "SELECT * FROM devices WHERE device_name = ?", (name,)
