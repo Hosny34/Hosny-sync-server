@@ -28,6 +28,15 @@ import db
 
 # One-year token lifetime for simple device-based auth flow.
 SIMPLE_TOKEN_TTL_SECONDS = 365 * 24 * 60 * 60
+ALLOWED_SIMPLE_DEVICE_NAMES = {
+    "WAREHOUSE",
+    "POS-ZAY",
+    "POS-OCT",
+    "POS-OBO",
+    "POS-GESR",
+    "POS-BAH",
+    "POS-CEN",
+}
 
 
 # ---- Helpers ----
@@ -82,6 +91,16 @@ def infer_role_from_device_name(device_name: str) -> str:
     return "warehouse" if clean_name.lower().startswith("warehouse") else "pos"
 
 
+def validate_simple_device_name(device_name: str) -> str:
+    clean_name = (device_name or "").strip()
+    if not clean_name:
+        raise ValueError("device_name is required")
+    canonical = clean_name.upper()
+    if canonical not in ALLOWED_SIMPLE_DEVICE_NAMES:
+        raise ValueError("invalid device name")
+    return canonical
+
+
 def ensure_simple_device(device_name: str) -> Dict[str, Any]:
     """Ensure a simplified auth device exists in the DB.
 
@@ -89,9 +108,7 @@ def ensure_simple_device(device_name: str) -> Dict[str, Any]:
     to reference a real devices.device_uuid. The simple device-name auth
     flow therefore provisions a normal device row lazily on first login.
     """
-    clean_name = device_name.strip()
-    if not clean_name:
-        raise ValueError("device_name is required")
+    clean_name = validate_simple_device_name(device_name)
     role = infer_role_from_device_name(clean_name)
     existing = db.get_device_by_name(clean_name)
     if existing is not None:

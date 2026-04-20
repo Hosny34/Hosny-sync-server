@@ -116,7 +116,10 @@ def issue_token(body: TokenRequest) -> TokenResponse:
             raise HTTPException(status_code=401, detail="invalid device or key")
         token, _ = auth.issue_jwt(dev)
     else:
-        token, _ = auth.issue_simple_device_jwt(device_name)
+        try:
+            token, _ = auth.issue_simple_device_jwt(device_name)
+        except ValueError as exc:
+            raise HTTPException(status_code=401, detail=str(exc))
 
     return TokenResponse(
         access_token=token,
