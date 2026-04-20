@@ -30,12 +30,20 @@ import db
 SIMPLE_TOKEN_TTL_SECONDS = 365 * 24 * 60 * 60
 ALLOWED_SIMPLE_DEVICE_NAMES = {
     "WAREHOUSE",
+    "STOCK-MONITOR",
+    "POS-STOCK-MONITOR",
     "POS-ZAY",
     "POS-OCT",
     "POS-OBO",
     "POS-GESR",
     "POS-BAH",
     "POS-CEN",
+}
+
+WAREHOUSE_ROLE_DEVICE_NAMES = {
+    "WAREHOUSE",
+    "STOCK-MONITOR",
+    "POS-STOCK-MONITOR",
 }
 
 
@@ -87,7 +95,9 @@ def register_device(device_name: str, role: str) -> Tuple[str, str]:
 # ---- Token issuance ----
 
 def infer_role_from_device_name(device_name: str) -> str:
-    clean_name = (device_name or "").strip()
+    clean_name = (device_name or "").strip().upper()
+    if clean_name in WAREHOUSE_ROLE_DEVICE_NAMES:
+        return "warehouse"
     return "warehouse" if clean_name.lower().startswith("warehouse") else "pos"
 
 
