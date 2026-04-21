@@ -274,6 +274,19 @@ def device_status_summary() -> List[Dict[str, Any]]:
     return [dict(r) for r in rows]
 
 
+def get_max_server_seq() -> int:
+    """Return the highest server_seq currently stored, or 0 if empty.
+
+    Clients use this to detect a server-side DB reset (e.g. after a
+    Railway redeploy onto ephemeral storage): if their local cursor is
+    greater than this value, their cursor is stale and must be reset.
+    """
+    row = get_conn().execute(
+        "SELECT COALESCE(MAX(server_seq), 0) AS mx FROM events"
+    ).fetchone()
+    return int((row["mx"] if row else 0) or 0)
+
+
 def readiness_probe() -> Dict[str, Any]:
     """Lightweight DB readiness check used by /v1/ready."""
     conn = get_conn()

@@ -74,6 +74,11 @@ class PullResponse(BaseModel):
     events: List[Dict[str, Any]]
     next_seq: int
     server_time: str
+    # Highest server_seq currently stored on the server. Clients compare
+    # this against their local `last_pulled_seq` to detect a server-side
+    # DB reset (common on Railway ephemeral storage) and auto-heal their
+    # cursor back to 0 instead of pulling 0 events forever.
+    max_server_seq: int = 0
 
 
 # ------------------------------- Auth dep ------------------------------ #
@@ -258,6 +263,7 @@ def sync_pull(
         events=events,
         next_seq=max_seq,
         server_time=_utc_now_iso(),
+        max_server_seq=db.get_max_server_seq(),
     )
 
 
