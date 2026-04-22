@@ -237,6 +237,26 @@ def pull_events(
     return [dict(r) for r in rows]
 
 
+def next_event_seq_for_scopes(
+    scopes: List[str],
+    since_seq: int,
+) -> int:
+    """Return the first server_seq available after `since_seq` for scopes.
+
+    Returns 0 when no matching events are currently available.
+    """
+    if not scopes:
+        return 0
+    placeholders = ",".join("?" * len(scopes))
+    sql = (
+        "SELECT COALESCE(MIN(server_seq), 0) AS mn "
+        "FROM events WHERE target_scope IN (" + placeholders + ") "
+        "AND server_seq > ?"
+    )
+    row = get_conn().execute(sql, (*scopes, int(since_seq))).fetchone()
+    return int((row["mn"] if row else 0) or 0)
+
+
 def update_cursor(
     device_uuid: str,
     channel: str,

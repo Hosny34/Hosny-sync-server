@@ -50,7 +50,24 @@ setup dialog along with the server URL (e.g.
 | POST   | /v1/auth/token       | any registered device    |
 | POST   | /v1/sync/push        | any authenticated device |
 | GET    | /v1/sync/pull        | any authenticated device |
+| GET    | /v1/sync/wait        | any authenticated device |
 | GET    | /v1/sync/status      | warehouse only           |
+
+## Near-real-time receiver wake-up
+
+To reduce delay on the receiving side, clients now use `GET /v1/sync/wait`
+as a long-poll nudge channel:
+
+- Client calls `/v1/sync/wait?since=<last_seq>&timeout_s=25`.
+- Server checks events visible to that device's pull scopes.
+- If a matching event exists with `server_seq > since`, server returns
+  immediately with `has_updates=true` and `next_seq`.
+- If no update arrives before timeout, server returns
+  `has_updates=false`.
+
+Clients keep periodic sync as a fallback, but when `has_updates=true`
+they trigger an immediate sync cycle, so propagation is typically near
+real-time instead of waiting for the next periodic tick.
 
 ## Access control summary
 
@@ -64,10 +81,10 @@ setup dialog along with the server URL (e.g.
   - `pos`       → `pos:<device_name>`, `all-pos`, `all`
 - **Status endpoint** is warehouse-only.
 
-## What this phase does NOT include
+## Current limits
 
-- No background auto-sync — clients push/pull only when the user
-  clicks the sync button.
+- Receiver wake-up exists via `/v1/sync/wait` long-poll nudge.
+- Transport remains HTTP polling (not WebSocket), by design.
 - No event appliers on either side — pulled events are stored in
   `sync_inbox` but not applied to domain tables yet. Phase 3/4 adds
   appliers.
