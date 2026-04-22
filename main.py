@@ -12,6 +12,7 @@ Endpoints:
 from __future__ import annotations
 
 import json
+import time
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
@@ -78,6 +79,13 @@ class PullResponse(BaseModel):
     # this against their local `last_pulled_seq` to detect a server-side
     # DB reset (common on Railway ephemeral storage) and auto-heal their
     # cursor back to 0 instead of pulling 0 events forever.
+    max_server_seq: int = 0
+
+
+class WaitResponse(BaseModel):
+    has_updates: bool
+    next_seq: int
+    server_time: str
     max_server_seq: int = 0
 
 
@@ -262,6 +270,40 @@ def sync_pull(
     return PullResponse(
         events=events,
         next_seq=max_seq,
+        server_time=_utc_now_iso(),
+        max_server_seq=db.get_max_server_seq(),
+    )
+
+
+@app.get("/v1/sync/wait", response_model=WaitResponse)
+def sync_wait(
+    since: int = Query(0, ge=0),
+    timeout_s: int = Query(25, ge=1, le=60),
+    device: Dict[str, Any] = Depends(current_device),
+) -> WaitResponse:
+    """Long-poll for new events visible to the current device.
+
+    Returns immediately when a matching event is available, otherwise
+    waits up to `timeout_s` and returns `has_updates=false`.
+    """
+    scopes = auth.allowed_scopes_for_pull(device["device_name"], device["role"])
+    deadline = time.monotonic() + float(timeout_s)
+    while True:
+        nxt = db.next_event_seq_for_scopes(scopes=scopes, since_seq=since)
+        if int(nxt) > int(since):
+            return WaitResponse(
+                has_updates=True,
+                next_seq=int(nxt),
+                server_time=_utc_now_iso(),
+                max_server_seq=db.get_max_server_seq(),
+            )
+        if time.monotonic() >= deadline:
+            break
+        time.sleep(0.5)
+
+    return WaitResponse(
+        has_updates=False,
+        next_seq=int(since),
         server_time=_utc_now_iso(),
         max_server_seq=db.get_max_server_seq(),
     )
