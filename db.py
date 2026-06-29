@@ -332,3 +332,94 @@ def health_summary() -> Dict[str, Any]:
         "events_count": int(row["events_count"] or 0),
         "max_server_seq": int(row["max_server_seq"] or 0),
     }
+
+
+def reset_device_state(device_name: str, target_scope: str) -> Dict[str, Any]:
+    clean_name = str(device_name or "").strip()
+    clean_scope = str(target_scope or "").strip()
+    if not clean_name:
+        raise ValueError("device_name is required")
+    if not clean_scope:
+        raise ValueError("target_scope is required")
+
+    existing = get_device_by_name(clean_name)
+    device_uuid = str(existing["device_uuid"]) if existing else ""
+
+    conn = get_conn()
+    if device_uuid:
+        events_deleted = int(
+            conn.execute(
+                "SELECT COUNT(*) FROM events WHERE source_device = ? OR target_scope = ?",
+                (device_uuid, clean_scope),
+            ).fetchone()[0]
+            or 0
+        )
+        cursors_deleted = int(
+            conn.execute(
+                "SELECT COUNT(*) FROM device_cursors WHERE device_uuid = ?",
+                (device_uuid,),
+            ).fetchone()[0]
+            or 0
+        )
+    else:
+        events_deleted = int(
+            conn.execute(
+                "SELECT COUNT(*) FROM events WHERE target_scope = ?",
+                (clean_scope,),
+            ).fetchone()[0]
+            or 0
+        )
+        cursors_deleted = 0
+    devices_deleted = int(
+        conn.execute(
+            "SELECT COUNT(*) FROM devices WHERE device_name = ?",
+            (clean_name,),
+        ).fetchone()[0]
+        or 0
+    )
+
+    with tx() as tx_conn:
+        if device_uuid:
+            tx_conn.execute(
+                "DELETE FROM events WHERE source_device = ? OR target_scope = ?",
+                (device_uuid, clean_scope),
+            )
+            tx_conn.execute(
+                "DELETE FROM device_cursors WHERE device_uuid = ?",
+                (device_uuid,),
+            )
+        else:
+            tx_conn.execute(
+                "DELETE FROM events WHERE target_scope = ?",
+                (clean_scope,),
+            )
+        tx_conn.execute(
+            "DELETE FROM devices WHERE device_name = ?",
+            (clean_name,),
+        )
+
+    return {
+        "ok": True,
+        "device_name": clean_name,
+        "target_scope": clean_scope,
+        "events_deleted": events_deleted,
+        "device_cursors_deleted": cursors_deleted,
+        "devices_deleted": devices_deleted,
+    }
+
+
+def reset_all_state() -> Dict[str, Any]:
+    conn = get_conn()
+    events_deleted = int(conn.execute("SELECT COUNT(*) FROM events").fetchone()[0] or 0)
+    cursors_deleted = int(conn.execute("SELECT COUNT(*) FROM device_cursors").fetchone()[0] or 0)
+    devices_deleted = int(conn.execute("SELECT COUNT(*) FROM devices").fetchone()[0] or 0)
+    with tx() as tx_conn:
+        tx_conn.execute("DELETE FROM events")
+        tx_conn.execute("DELETE FROM device_cursors")
+        tx_conn.execute("DELETE FROM devices")
+    return {
+        "ok": True,
+        "events_deleted": events_deleted,
+        "device_cursors_deleted": cursors_deleted,
+        "devices_deleted": devices_deleted,
+    }

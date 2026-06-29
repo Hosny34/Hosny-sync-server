@@ -38,6 +38,10 @@ JWT_TTL_SECONDS: int = int(os.environ.get("JWT_TTL_SECONDS", "86400"))  # 24h
 SIMPLE_DEVICE_JWT_TTL_SECONDS: int = int(
     os.environ.get("SIMPLE_DEVICE_JWT_TTL_SECONDS", "43200")
 )  # 12h
+RESET_ADMIN_TOKEN: str = os.environ.get(
+    "RESET_ADMIN_TOKEN",
+    "hosny-reset-8d7f3c1a4b6e9f2051c8d4a7e3b92f6c",
+).strip()
 
 # Max events accepted in a single push and returned by a single pull.
 MAX_PUSH_BATCH: int = int(os.environ.get("MAX_PUSH_BATCH", "500"))

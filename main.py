@@ -20,7 +20,7 @@ from fastapi import Depends, FastAPI, Header, HTTPException, Query
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 
-from config import MAX_PULL_BATCH, MAX_PUSH_BATCH
+from config import MAX_PULL_BATCH, MAX_PUSH_BATCH, RESET_ADMIN_TOKEN
 import auth
 import db
 
@@ -89,6 +89,15 @@ class WaitResponse(BaseModel):
     max_server_seq: int = 0
 
 
+class AdminResetDeviceRequest(BaseModel):
+    device_name: str
+    target_scope: Optional[str] = None
+
+
+class AdminResetAllRequest(BaseModel):
+    confirm: str
+
+
 # ------------------------------- Auth dep ------------------------------ #
 
 def current_device(authorization: Optional[str] = Header(None)) -> Dict[str, Any]:
@@ -105,6 +114,14 @@ def warehouse_only(device: Dict[str, Any] = Depends(current_device)) -> Dict[str
     if device["role"] != "warehouse":
         raise HTTPException(status_code=403, detail="warehouse role required")
     return device
+
+
+def reset_admin_only(x_reset_token: Optional[str] = Header(None, alias="X-Reset-Token")) -> bool:
+    if not RESET_ADMIN_TOKEN:
+        raise HTTPException(status_code=503, detail="reset admin token is not configured")
+    if not x_reset_token or x_reset_token != RESET_ADMIN_TOKEN:
+        raise HTTPException(status_code=401, detail="invalid reset admin token")
+    return True
 
 
 # ------------------------------- Routes -------------------------------- #
@@ -315,3 +332,30 @@ def sync_status(device: Dict[str, Any] = Depends(warehouse_only)) -> Dict[str, A
         "server_time": _utc_now_iso(),
         "devices": db.device_status_summary(),
     }
+
+
+@app.post("/v1/admin/reset-device")
+def admin_reset_device(
+    body: AdminResetDeviceRequest,
+    _ok: bool = Depends(reset_admin_only),
+) -> Dict[str, Any]:
+    device_name = auth.validate_simple_device_name(body.device_name)
+    target_scope = (body.target_scope or "").strip()
+    if not target_scope:
+        role = auth.infer_role_from_device_name(device_name)
+        target_scope = "warehouse" if role == "warehouse" else ("pos:" + device_name)
+    result = db.reset_device_state(device_name, target_scope)
+    result["server_time"] = _utc_now_iso()
+    return result
+
+
+@app.post("/v1/admin/reset-all")
+def admin_reset_all(
+    body: AdminResetAllRequest,
+    _ok: bool = Depends(reset_admin_only),
+) -> Dict[str, Any]:
+    if (body.confirm or "").strip().upper() != "RESET ALL":
+        raise HTTPException(status_code=422, detail="confirmation text must be RESET ALL")
+    result = db.reset_all_state()
+    result["server_time"] = _utc_now_iso()
+    return result
