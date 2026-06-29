@@ -20,7 +20,7 @@ from fastapi import Depends, FastAPI, Header, HTTPException, Query
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 
-from config import MAX_PULL_BATCH, MAX_PUSH_BATCH, RESET_ADMIN_TOKEN
+from config import MAX_PULL_BATCH, MAX_PUSH_BATCH
 import auth
 import db
 
@@ -114,14 +114,6 @@ def warehouse_only(device: Dict[str, Any] = Depends(current_device)) -> Dict[str
     if device["role"] != "warehouse":
         raise HTTPException(status_code=403, detail="warehouse role required")
     return device
-
-
-def reset_admin_only(x_reset_token: Optional[str] = Header(None, alias="X-Reset-Token")) -> bool:
-    if not RESET_ADMIN_TOKEN:
-        raise HTTPException(status_code=503, detail="reset admin token is not configured")
-    if not x_reset_token or x_reset_token != RESET_ADMIN_TOKEN:
-        raise HTTPException(status_code=401, detail="invalid reset admin token")
-    return True
 
 
 # ------------------------------- Routes -------------------------------- #
@@ -337,7 +329,6 @@ def sync_status(device: Dict[str, Any] = Depends(warehouse_only)) -> Dict[str, A
 @app.post("/v1/admin/reset-device")
 def admin_reset_device(
     body: AdminResetDeviceRequest,
-    _ok: bool = Depends(reset_admin_only),
 ) -> Dict[str, Any]:
     device_name = auth.validate_simple_device_name(body.device_name)
     target_scope = (body.target_scope or "").strip()
@@ -352,7 +343,6 @@ def admin_reset_device(
 @app.post("/v1/admin/reset-all")
 def admin_reset_all(
     body: AdminResetAllRequest,
-    _ok: bool = Depends(reset_admin_only),
 ) -> Dict[str, Any]:
     if (body.confirm or "").strip().upper() != "RESET ALL":
         raise HTTPException(status_code=422, detail="confirmation text must be RESET ALL")
