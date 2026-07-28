@@ -42,6 +42,12 @@ SIMPLE_DEVICE_JWT_TTL_SECONDS: int = int(
 MAX_PUSH_BATCH: int = int(os.environ.get("MAX_PUSH_BATCH", "500"))
 MAX_PULL_BATCH: int = int(os.environ.get("MAX_PULL_BATCH", "500"))
 
+# POS auto-update packages. The server serves the latest manifest and package
+# files from this folder; publishing is done by copying prepared files here.
+POS_UPDATES_DIR = Path(
+    os.environ.get("POS_UPDATES_DIR") or str(BASE_DIR / "updates" / "pos")
+)
+
 
 def is_sqlite() -> bool:
     return DATABASE_URL.startswith("sqlite:")
