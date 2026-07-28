@@ -20,15 +20,15 @@
     "POS/update_client.py"
   ],
   "hashes": {
-    "package_sha256": "c8e97c02ebfa06a1a082c600fd37f29cdba3184c0588f830b456b61f712f6ccd"
+    "package_sha256": "bcc1dc323c23747ac1d87d65c2d37705c89bf7e7543325ad167bf4fed446b60d"
   },
   "notes": "POS update",
-  "package_file": "HosnyPOS-2026.07.28.233506.zip",
-  "published_at": "2026-07-28T20:35:06Z",
+  "package_file": "HosnyPOS-2026.07.28.234215.zip",
+  "published_at": "2026-07-28T20:42:15Z",
   "required_files": [
     "POS/HosnyPOS.py",
     "POS/HosnyPOS.spec",
     "POS/build_pos.bat"
   ],
-  "version": "2026.07.28.233506"
+  "version": "2026.07.28.234215"
 }
