@@ -22,15 +22,15 @@
     "POS/prebuilt_update.json"
   ],
   "hashes": {
-    "package_sha256": "44d7037ffb03e49fa2574251a6409290c5959508f3f8504eedefae9727cabf1e"
+    "package_sha256": "3a2f3f882f1fa0d995421694b4ff04ce9a1012f54c90e94bf186a0bbe2ad16fe"
   },
   "notes": "POS update",
-  "package_file": "HosnyPOS-2026.07.29.005406.zip",
-  "published_at": "2026-07-28T21:54:42Z",
+  "package_file": "HosnyPOS-2026.07.29.011522.zip",
+  "published_at": "2026-07-28T22:15:59Z",
   "required_files": [
     "POS/HosnyPOS.py",
     "POS/HosnyPOS.spec",
     "POS/build_pos.bat"
   ],
-  "version": "2026.07.29.005406"
+  "version": "2026.07.29.011522"
 }
