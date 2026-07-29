@@ -21,18 +21,19 @@
     "POS/sync_core.py",
     "POS/sync_periodic.py",
     "POS/sync_ui.py",
-    "POS/update_client.py"
+    "POS/update_client.py",
+    "POS/verify_pe_arch.py"
   ],
   "hashes": {
-    "package_sha256": "a49bce85598ba6c8695b510058d4802331c9af76563ed5805e9a31b54dba0fac"
+    "package_sha256": "307eaa26f2c531db3d4686125b89059384f64ddc4298bac8d81548f9d147c2c2"
   },
   "notes": "POS update",
-  "package_file": "HosnyPOS-2026.07.29.210155.zip",
-  "published_at": "2026-07-29T18:02:25Z",
+  "package_file": "HosnyPOS-2026.07.29.210840.zip",
+  "published_at": "2026-07-29T18:09:10Z",
   "required_files": [
     "POS/HosnyPOS.py",
     "POS/HosnyPOS.spec",
     "POS/build_pos.bat"
   ],
-  "version": "2026.07.29.210155"
+  "version": "2026.07.29.210840"
 }
