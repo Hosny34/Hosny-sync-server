@@ -25,15 +25,15 @@
     "POS/verify_pe_arch.py"
   ],
   "hashes": {
-    "package_sha256": "097db4fb4f6cb2d18bdef5af442241bd7f9b7f978c7f88a1e659ee5c6570aed3"
+    "package_sha256": "eacecf30f9fe7af565f9e1825c0769d8a9b0c4280b209fb0a886fcdef1a7de5a"
   },
-  "notes": "POS update",
-  "package_file": "HosnyPOS-2026.8.2.23.zip",
-  "published_at": "2026-08-04T13:53:35Z",
+  "notes": "Branch catalog repair, local-only POS audit, smoother background sync",
+  "package_file": "HosnyPOS-2026.8.2.24.zip",
+  "published_at": "2026-08-04T14:57:59Z",
   "required_files": [
     "POS/HosnyPOS.py",
     "POS/HosnyPOS.spec",
     "POS/build_pos.bat"
   ],
-  "version": "2026.8.2.23"
+  "version": "2026.8.2.24"
 }
