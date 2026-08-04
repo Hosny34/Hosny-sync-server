@@ -25,15 +25,15 @@
     "POS/verify_pe_arch.py"
   ],
   "hashes": {
-    "package_sha256": "eacecf30f9fe7af565f9e1825c0769d8a9b0c4280b209fb0a886fcdef1a7de5a"
+    "package_sha256": "d349f1828cacf398b4e53bc10ebbfd1119bcef96a4d6d5f21eacab4ba6107433"
   },
-  "notes": "Branch catalog repair, local-only POS audit, smoother background sync",
-  "package_file": "HosnyPOS-2026.8.2.24.zip",
-  "published_at": "2026-08-04T14:57:59Z",
+  "notes": "POS branch school repair, local audit only, net shift totals, long receipt printing",
+  "package_file": "HosnyPOS-2026.8.2.25.zip",
+  "published_at": "2026-08-04T15:11:16Z",
   "required_files": [
     "POS/HosnyPOS.py",
     "POS/HosnyPOS.spec",
     "POS/build_pos.bat"
   ],
-  "version": "2026.8.2.24"
+  "version": "2026.8.2.25"
 }
