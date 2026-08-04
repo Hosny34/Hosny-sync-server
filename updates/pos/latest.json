@@ -25,15 +25,15 @@
     "POS/verify_pe_arch.py"
   ],
   "hashes": {
-    "package_sha256": "01057008f678a5ba2c049dd2cc53cf34bddb6ae3301022854f84917ac82c269c"
+    "package_sha256": "5cbe489e374cb88aa5dd99c69eb17e27575c234b41bcc23e4b608e60abdadcc7"
   },
-  "notes": "POS outcome school selector shows branch-owned schools and unhides repaired branch schools",
-  "package_file": "HosnyPOS-2026.8.2.26.zip",
-  "published_at": "2026-08-04T15:17:53Z",
+  "notes": "POS update",
+  "package_file": "HosnyPOS-2026.8.2.27.zip",
+  "published_at": "2026-08-04T15:33:04Z",
   "required_files": [
     "POS/HosnyPOS.py",
     "POS/HosnyPOS.spec",
     "POS/build_pos.bat"
   ],
-  "version": "2026.8.2.26"
+  "version": "2026.8.2.27"
 }
