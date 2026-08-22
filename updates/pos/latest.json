@@ -25,15 +25,15 @@
     "POS/verify_pe_arch.py"
   ],
   "hashes": {
-    "package_sha256": "cd511addc8a13955c11bab6e4e43e5873fab89c70a3de660a947048bd2275813"
+    "package_sha256": "841f24222d9fef2bd05d2424dfbb3e00abded7c29b2d690e6533e88116534cfb"
   },
-  "notes": "POS update",
-  "package_file": "HosnyPOS-2026.8.2.78.zip",
-  "published_at": "2026-08-22T12:48:04Z",
+  "notes": "Hotfix: fix POS bill save note crash and reservation refund display",
+  "package_file": "HosnyPOS-2026.8.2.79.zip",
+  "published_at": "2026-08-22T14:16:04Z",
   "required_files": [
     "POS/HosnyPOS.py",
     "POS/HosnyPOS.spec",
     "POS/build_pos.bat"
   ],
-  "version": "2026.8.2.78"
+  "version": "2026.8.2.79"
 }
