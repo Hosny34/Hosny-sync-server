@@ -48,6 +48,10 @@ POS_UPDATES_DIR = Path(
     os.environ.get("POS_UPDATES_DIR") or str(BASE_DIR / "updates" / "pos")
 )
 
+# Separate secret used only by the customer stock uploader. This is not a POS
+# or warehouse sync token, so the WhatsApp stock path stays isolated.
+CUSTOMER_STOCK_UPLOAD_TOKEN: str = os.environ.get("CUSTOMER_STOCK_UPLOAD_TOKEN", "").strip()
+
 
 def is_sqlite() -> bool:
     return DATABASE_URL.startswith("sqlite:")

@@ -100,6 +100,23 @@ def init_schema() -> None:
             updated_at      TEXT NOT NULL,
             PRIMARY KEY (device_uuid, channel)
         );
+
+        CREATE TABLE IF NOT EXISTS customer_stock_cache (
+            source_device TEXT NOT NULL,
+            item_type     TEXT NOT NULL,
+            school        TEXT NOT NULL,
+            color         TEXT NOT NULL,
+            size          TEXT NOT NULL,
+            unit_price    REAL NOT NULL DEFAULT 0,
+            count         INTEGER NOT NULL DEFAULT 0,
+            snapshot_at   TEXT NOT NULL,
+            uploaded_at   TEXT NOT NULL,
+            PRIMARY KEY (source_device, item_type, school, color, size, unit_price)
+        );
+        CREATE INDEX IF NOT EXISTS ix_customer_stock_lookup
+            ON customer_stock_cache(school, item_type, color, size, count);
+        CREATE INDEX IF NOT EXISTS ix_customer_stock_uploaded
+            ON customer_stock_cache(uploaded_at);
         """
     )
 
@@ -423,3 +440,127 @@ def reset_all_state() -> Dict[str, Any]:
         "device_cursors_deleted": cursors_deleted,
         "devices_deleted": devices_deleted,
     }
+
+
+# ---- Customer stock cache ----
+
+def replace_customer_stock(rows: List[Dict[str, Any]], uploaded_at: str) -> Dict[str, Any]:
+    """Replace the customer-facing stock cache.
+
+    This is intentionally separate from the sync event log. The WhatsApp bot
+    only needs a safe read model, and updating it must not alter POS/Warehouse
+    sync state.
+    """
+    cleaned: List[Tuple[Any, ...]] = []
+    for r in rows:
+        source_device = str(r.get("source_device") or "").strip()
+        item_type = str(r.get("item_type") or "").strip()
+        school = str(r.get("school") or "").strip()
+        color = str(r.get("color") or "").strip()
+        size = str(r.get("size") or "").strip()
+        if not (source_device and item_type and school and color and size):
+            continue
+        try:
+            unit_price = float(r.get("unit_price") or 0)
+            count = int(float(r.get("count") or 0))
+        except (TypeError, ValueError):
+            continue
+        snapshot_at = str(r.get("snapshot_at") or uploaded_at).strip() or uploaded_at
+        cleaned.append(
+            (
+                source_device,
+                item_type,
+                school,
+                color,
+                size,
+                unit_price,
+                max(0, count),
+                snapshot_at,
+                uploaded_at,
+            )
+        )
+
+    with tx() as conn:
+        conn.execute("DELETE FROM customer_stock_cache")
+        conn.executemany(
+            """
+            INSERT INTO customer_stock_cache
+                (source_device, item_type, school, color, size,
+                 unit_price, count, snapshot_at, uploaded_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            cleaned,
+        )
+    return {"rows_received": len(rows), "rows_saved": len(cleaned), "uploaded_at": uploaded_at}
+
+
+def customer_stock_summary() -> Dict[str, Any]:
+    row = get_conn().execute(
+        """
+        SELECT COUNT(*) AS rows_count,
+               COALESCE(SUM(count), 0) AS total_count,
+               COALESCE(SUM(count * unit_price), 0) AS total_value,
+               MAX(uploaded_at) AS uploaded_at
+          FROM customer_stock_cache
+        """
+    ).fetchone()
+    return {
+        "rows_count": int(row["rows_count"] or 0),
+        "total_count": int(row["total_count"] or 0),
+        "total_value": float(row["total_value"] or 0),
+        "uploaded_at": row["uploaded_at"],
+    }
+
+
+def customer_known_values(field: str, limit: int = 2000) -> List[str]:
+    if field not in {"item_type", "school", "color", "size"}:
+        return []
+    rows = get_conn().execute(
+        f"""
+        SELECT DISTINCT TRIM({field}) AS value
+          FROM customer_stock_cache
+         WHERE COALESCE(TRIM({field}), '') <> ''
+         ORDER BY LENGTH(TRIM({field})) DESC, TRIM({field})
+         LIMIT ?
+        """,
+        (int(limit),),
+    ).fetchall()
+    return [str(r["value"] or "").strip() for r in rows if str(r["value"] or "").strip()]
+
+
+def query_customer_stock(
+    *,
+    item_type: str = "",
+    school: str = "",
+    color: str = "",
+    size: str = "",
+    min_count: int = 1,
+    limit: int = 30,
+) -> List[Dict[str, Any]]:
+    where = ["COALESCE(count, 0) >= ?"]
+    args: List[Any] = [int(min_count)]
+    for field, value in (
+        ("item_type", item_type),
+        ("school", school),
+        ("color", color),
+        ("size", size),
+    ):
+        text = str(value or "").strip()
+        if text:
+            where.append(f"LOWER(TRIM({field})) LIKE LOWER(?)")
+            args.append(f"%{text}%")
+    rows = get_conn().execute(
+        f"""
+        SELECT source_device, item_type, school, color, size, unit_price,
+               SUM(count) AS count,
+               MAX(snapshot_at) AS snapshot_at,
+               MAX(uploaded_at) AS uploaded_at
+          FROM customer_stock_cache
+         WHERE {' AND '.join(where)}
+         GROUP BY source_device, item_type, school, color, size, unit_price
+         ORDER BY school, item_type, color, size, unit_price, source_device
+         LIMIT ?
+        """,
+        (*args, int(limit)),
+    ).fetchall()
+    return [dict(r) for r in rows]

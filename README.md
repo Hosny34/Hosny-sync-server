@@ -53,6 +53,28 @@ setup dialog along with the server URL (e.g.
 | GET    | /v1/sync/wait        | any authenticated device |
 | GET    | /v1/sync/status      | warehouse only           |
 
+## Customer stock cache
+
+The WhatsApp bot can use a separate read model that does not affect the
+POS/Warehouse sync event log.
+
+Set this secret on Railway before enabling uploads:
+
+```text
+CUSTOMER_STOCK_UPLOAD_TOKEN=<long-random-secret>
+```
+
+Endpoints:
+
+| Method | Path                      | Who                         |
+|--------|---------------------------|-----------------------------|
+| POST   | /v1/customer/stock/upload | Warehouse laptop uploader   |
+| GET    | /v1/customer/stock        | Customer bot                |
+| GET    | /v1/customer/known-values | Customer bot                |
+
+The upload endpoint replaces only `customer_stock_cache`. It does not insert,
+delete, or modify sync `events`, `devices`, or POS/Warehouse cursors.
+
 ## Near-real-time receiver wake-up
 
 To reduce delay on the receiving side, clients now use `GET /v1/sync/wait`

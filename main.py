@@ -21,7 +21,7 @@ from fastapi import Depends, FastAPI, Header, HTTPException, Query
 from fastapi.responses import FileResponse, JSONResponse
 from pydantic import BaseModel, Field
 
-from config import MAX_PULL_BATCH, MAX_PUSH_BATCH, POS_UPDATES_DIR
+from config import CUSTOMER_STOCK_UPLOAD_TOKEN, MAX_PULL_BATCH, MAX_PUSH_BATCH, POS_UPDATES_DIR
 import auth
 import db
 
@@ -105,6 +105,22 @@ class PosUpdateLatestResponse(BaseModel):
     server_time: str
 
 
+class CustomerStockRowIn(BaseModel):
+    source_device: str
+    item_type: str
+    school: str
+    color: str
+    size: str
+    unit_price: float = 0
+    count: int = 0
+    snapshot_at: Optional[str] = None
+
+
+class CustomerStockUploadRequest(BaseModel):
+    uploaded_at: Optional[str] = None
+    rows: List[CustomerStockRowIn]
+
+
 # ------------------------------- Auth dep ------------------------------ #
 
 def current_device(authorization: Optional[str] = Header(None)) -> Dict[str, Any]:
@@ -121,6 +137,14 @@ def warehouse_only(device: Dict[str, Any] = Depends(current_device)) -> Dict[str
     if device["role"] != "warehouse":
         raise HTTPException(status_code=403, detail="warehouse role required")
     return device
+
+
+def customer_stock_upload_auth(x_customer_stock_token: Optional[str] = Header(None)) -> None:
+    expected = CUSTOMER_STOCK_UPLOAD_TOKEN
+    if not expected:
+        raise HTTPException(status_code=503, detail="customer stock upload token is not configured")
+    if (x_customer_stock_token or "").strip() != expected:
+        raise HTTPException(status_code=401, detail="invalid customer stock upload token")
 
 
 # ------------------------------- Routes -------------------------------- #
@@ -331,6 +355,54 @@ def sync_status(device: Dict[str, Any] = Depends(warehouse_only)) -> Dict[str, A
         "server_time": _utc_now_iso(),
         "devices": db.device_status_summary(),
     }
+
+
+@app.get("/v1/customer/stock")
+def customer_stock(
+    item_type: str = "",
+    school: str = "",
+    color: str = "",
+    size: str = "",
+    min_count: int = Query(1, ge=0),
+    limit: int = Query(30, ge=1, le=200),
+) -> Dict[str, Any]:
+    return {
+        "server_time": _utc_now_iso(),
+        "summary": db.customer_stock_summary(),
+        "rows": db.query_customer_stock(
+            item_type=item_type,
+            school=school,
+            color=color,
+            size=size,
+            min_count=min_count,
+            limit=limit,
+        ),
+    }
+
+
+@app.get("/v1/customer/known-values")
+def customer_known_values(
+    field: str,
+    limit: int = Query(2000, ge=1, le=10000),
+) -> Dict[str, Any]:
+    if field not in {"item_type", "school", "color", "size"}:
+        raise HTTPException(status_code=422, detail="invalid field")
+    return {
+        "server_time": _utc_now_iso(),
+        "field": field,
+        "values": db.customer_known_values(field, limit),
+    }
+
+
+@app.post("/v1/customer/stock/upload", dependencies=[Depends(customer_stock_upload_auth)])
+def customer_stock_upload(body: CustomerStockUploadRequest) -> Dict[str, Any]:
+    uploaded_at = (body.uploaded_at or "").strip() or _utc_now_iso()
+    rows = [
+        r.model_dump() if hasattr(r, "model_dump") else r.dict()
+        for r in body.rows
+    ]
+    result = db.replace_customer_stock(rows, uploaded_at)
+    return {"ok": True, "server_time": _utc_now_iso(), **result}
 
 
 def _pos_updates_dir() -> Path:
