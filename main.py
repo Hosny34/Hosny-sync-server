@@ -359,6 +359,7 @@ def sync_status(device: Dict[str, Any] = Depends(warehouse_only)) -> Dict[str, A
 
 @app.get("/v1/customer/stock")
 def customer_stock(
+    source_device: str = "",
     item_type: str = "",
     school: str = "",
     color: str = "",
@@ -370,6 +371,7 @@ def customer_stock(
         "server_time": _utc_now_iso(),
         "summary": db.customer_stock_summary(),
         "rows": db.query_customer_stock(
+            source_device=source_device,
             item_type=item_type,
             school=school,
             color=color,
@@ -383,6 +385,11 @@ def customer_stock(
 @app.get("/v1/customer/known-values")
 def customer_known_values(
     field: str,
+    source_device: str = "",
+    item_type: str = "",
+    school: str = "",
+    color: str = "",
+    min_count: int = Query(0, ge=0),
     limit: int = Query(2000, ge=1, le=10000),
 ) -> Dict[str, Any]:
     if field not in {"item_type", "school", "color", "size"}:
@@ -390,7 +397,15 @@ def customer_known_values(
     return {
         "server_time": _utc_now_iso(),
         "field": field,
-        "values": db.customer_known_values(field, limit),
+        "values": db.customer_known_values(
+            field,
+            limit,
+            source_device=source_device,
+            item_type=item_type,
+            school=school,
+            color=color,
+            min_count=min_count,
+        ),
     }
 
 

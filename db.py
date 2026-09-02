@@ -512,18 +512,39 @@ def customer_stock_summary() -> Dict[str, Any]:
     }
 
 
-def customer_known_values(field: str, limit: int = 2000) -> List[str]:
+def customer_known_values(
+    field: str,
+    limit: int = 2000,
+    *,
+    source_device: str = "",
+    item_type: str = "",
+    school: str = "",
+    color: str = "",
+    min_count: int = 0,
+) -> List[str]:
     if field not in {"item_type", "school", "color", "size"}:
         return []
+    where = [f"COALESCE(TRIM({field}), '') <> ''", "COALESCE(count, 0) >= ?"]
+    args: List[Any] = [int(min_count)]
+    for filter_field, value in (
+        ("source_device", source_device),
+        ("item_type", item_type),
+        ("school", school),
+        ("color", color),
+    ):
+        text = str(value or "").strip()
+        if text:
+            where.append(f"LOWER(TRIM({filter_field})) LIKE LOWER(?)")
+            args.append(f"%{text}%")
     rows = get_conn().execute(
         f"""
         SELECT DISTINCT TRIM({field}) AS value
           FROM customer_stock_cache
-         WHERE COALESCE(TRIM({field}), '') <> ''
+         WHERE {' AND '.join(where)}
          ORDER BY LENGTH(TRIM({field})) DESC, TRIM({field})
          LIMIT ?
         """,
-        (int(limit),),
+        (*args, int(limit)),
     ).fetchall()
     return [str(r["value"] or "").strip() for r in rows if str(r["value"] or "").strip()]
 
@@ -534,6 +555,7 @@ def query_customer_stock(
     school: str = "",
     color: str = "",
     size: str = "",
+    source_device: str = "",
     min_count: int = 1,
     limit: int = 30,
 ) -> List[Dict[str, Any]]:
@@ -544,6 +566,7 @@ def query_customer_stock(
         ("school", school),
         ("color", color),
         ("size", size),
+        ("source_device", source_device),
     ):
         text = str(value or "").strip()
         if text:
