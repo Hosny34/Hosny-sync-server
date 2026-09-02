@@ -62,6 +62,18 @@ class EventIn(BaseModel):
     created_at: Optional[str] = None
 
 
+POS_MUTATING_WAREHOUSE_EVENTS = {
+    "STOCK_TRANSFER_OUT",
+    "STOCK_TRANSFER_CANCELLED",
+    "BRANCH_STOCK_RECLASSIFIED",
+    "BRANCH_CATALOG_DELETED",
+    "SPEC_RENAMED",
+    "PRICE_UPDATE",
+    "CATALOG_UPSERT",
+    "POS_OWNERSHIP_SNAPSHOT",
+}
+
+
 class PushRequest(BaseModel):
     events: List[EventIn]
 
@@ -119,6 +131,23 @@ class CustomerStockRowIn(BaseModel):
 class CustomerStockUploadRequest(BaseModel):
     uploaded_at: Optional[str] = None
     rows: List[CustomerStockRowIn]
+
+
+class CustomerReservationRowIn(BaseModel):
+    source_device: str
+    bill_number: str
+    reservation_key: str
+    item_type: str
+    school: str
+    color: str
+    size: str
+    pending_qty: int = 0
+    updated_at: Optional[str] = None
+
+
+class CustomerReservationUploadRequest(BaseModel):
+    uploaded_at: Optional[str] = None
+    rows: List[CustomerReservationRowIn]
 
 
 # ------------------------------- Auth dep ------------------------------ #
@@ -251,7 +280,17 @@ def sync_push(
     for ev in body.events:
         # Server-enforced: source_device is ALWAYS the caller. Clients
         # cannot forge events as other devices.
-        scope = _normalize_target_scope(ev.target_scope or "", device)
+        requested_scope = str(ev.target_scope or ev.payload.get("__target_scope__") or "").strip()
+        if (
+            str(device.get("role") or "") == "warehouse"
+            and str(ev.event_type or "").strip().upper() in POS_MUTATING_WAREHOUSE_EVENTS
+            and not requested_scope
+        ):
+            raise HTTPException(
+                status_code=422,
+                detail=f"{ev.event_type} requires explicit target_scope",
+            )
+        scope = _normalize_target_scope(requested_scope, device)
         rows.append(
             (
                 ev.event_uuid,
@@ -417,6 +456,59 @@ def customer_stock_upload(body: CustomerStockUploadRequest) -> Dict[str, Any]:
         for r in body.rows
     ]
     result = db.replace_customer_stock(rows, uploaded_at)
+    return {"ok": True, "server_time": _utc_now_iso(), **result}
+
+
+@app.get("/v1/customer/reservations/summary")
+def customer_reservations_summary(
+    source_device: str = "",
+    item_type: str = "",
+    school: str = "",
+    color: str = "",
+    size: str = "",
+) -> Dict[str, Any]:
+    return {
+        "server_time": _utc_now_iso(),
+        **db.query_customer_reserved_quantity(
+            source_device=source_device,
+            item_type=item_type,
+            school=school,
+            color=color,
+            size=size,
+        ),
+    }
+
+
+@app.get("/v1/customer/reservations/check")
+def customer_reservations_check(
+    source_device: str,
+    bill_number: str,
+    item_type: str = "",
+    school: str = "",
+    color: str = "",
+    size: str = "",
+) -> Dict[str, Any]:
+    row = db.check_customer_reservation(
+        source_device=source_device,
+        bill_number=bill_number,
+        item_type=item_type,
+        school=school,
+        color=color,
+        size=size,
+    )
+    if not row:
+        raise HTTPException(status_code=404, detail="reservation not found")
+    return {"server_time": _utc_now_iso(), **row}
+
+
+@app.post("/v1/customer/reservations/upload", dependencies=[Depends(customer_stock_upload_auth)])
+def customer_reservations_upload(body: CustomerReservationUploadRequest) -> Dict[str, Any]:
+    uploaded_at = (body.uploaded_at or "").strip() or _utc_now_iso()
+    rows = [
+        r.model_dump() if hasattr(r, "model_dump") else r.dict()
+        for r in body.rows
+    ]
+    result = db.replace_customer_reservations(rows, uploaded_at)
     return {"ok": True, "server_time": _utc_now_iso(), **result}
 
 

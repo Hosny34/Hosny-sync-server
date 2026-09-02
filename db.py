@@ -92,6 +92,8 @@ def init_schema() -> None:
             ON events(target_scope, server_seq);
         CREATE INDEX IF NOT EXISTS ix_events_source
             ON events(source_device);
+        CREATE INDEX IF NOT EXISTS ix_events_snapshot_compact
+            ON events(event_type, source_device, server_seq);
 
         CREATE TABLE IF NOT EXISTS device_cursors (
             device_uuid     TEXT NOT NULL REFERENCES devices(device_uuid),
@@ -117,6 +119,24 @@ def init_schema() -> None:
             ON customer_stock_cache(school, item_type, color, size, count);
         CREATE INDEX IF NOT EXISTS ix_customer_stock_uploaded
             ON customer_stock_cache(uploaded_at);
+
+        CREATE TABLE IF NOT EXISTS customer_reservation_cache (
+            source_device TEXT NOT NULL,
+            bill_number   TEXT NOT NULL,
+            reservation_key TEXT NOT NULL,
+            item_type     TEXT NOT NULL,
+            school        TEXT NOT NULL,
+            color         TEXT NOT NULL,
+            size          TEXT NOT NULL,
+            pending_qty   INTEGER NOT NULL DEFAULT 0,
+            updated_at    TEXT NOT NULL,
+            uploaded_at   TEXT NOT NULL,
+            PRIMARY KEY (source_device, reservation_key)
+        );
+        CREATE INDEX IF NOT EXISTS ix_customer_reservation_specs
+            ON customer_reservation_cache(source_device, school, item_type, color, size, pending_qty);
+        CREATE INDEX IF NOT EXISTS ix_customer_reservation_bill
+            ON customer_reservation_cache(source_device, bill_number);
         """
     )
 
@@ -246,10 +266,18 @@ def pull_events(
         "SELECT server_seq, event_uuid, event_type, source_device, "
         "target_scope, payload, created_at "
         "FROM events WHERE target_scope IN (" + placeholders + ") "
-        "AND server_seq > ? ORDER BY server_seq ASC LIMIT ?"
+        "AND server_seq > ? "
+        "AND (event_type <> 'POS_STOCK_SNAPSHOT' OR NOT EXISTS ("
+        "    SELECT 1 FROM events newer "
+        "    WHERE newer.target_scope IN (" + placeholders + ") "
+        "      AND newer.event_type = 'POS_STOCK_SNAPSHOT' "
+        "      AND newer.source_device = events.source_device "
+        "      AND newer.server_seq > events.server_seq"
+        ")) "
+        "ORDER BY server_seq ASC LIMIT ?"
     )
     rows = get_conn().execute(
-        sql, (*scopes, int(since_seq), int(limit))
+        sql, (*scopes, int(since_seq), *scopes, int(limit))
     ).fetchall()
     return [dict(r) for r in rows]
 
@@ -590,3 +618,149 @@ def query_customer_stock(
         (*args, int(limit)),
     ).fetchall()
     return [dict(r) for r in rows]
+
+
+# ---- Customer reservation cache ----
+
+def replace_customer_reservations(rows: List[Dict[str, Any]], uploaded_at: str) -> Dict[str, Any]:
+    """Replace the customer-facing pending-reservation cache.
+
+    This read model is used only by the WhatsApp bot to reduce displayed
+    availability by pending reservations. It is separate from sync events and
+    does not mutate POS or Warehouse state.
+    """
+    cleaned: List[Tuple[Any, ...]] = []
+    for r in rows:
+        source_device = str(r.get("source_device") or "").strip()
+        bill_number = str(r.get("bill_number") or "").strip()
+        reservation_key = str(r.get("reservation_key") or "").strip()
+        item_type = str(r.get("item_type") or "").strip()
+        school = str(r.get("school") or "").strip()
+        color = str(r.get("color") or "").strip()
+        size = str(r.get("size") or "").strip()
+        if not (source_device and bill_number and reservation_key and item_type and school and color and size):
+            continue
+        try:
+            pending_qty = int(float(r.get("pending_qty") or 0))
+        except (TypeError, ValueError):
+            continue
+        if pending_qty <= 0:
+            continue
+        updated_at = str(r.get("updated_at") or uploaded_at).strip() or uploaded_at
+        cleaned.append(
+            (
+                source_device,
+                bill_number,
+                reservation_key,
+                item_type,
+                school,
+                color,
+                size,
+                pending_qty,
+                updated_at,
+                uploaded_at,
+            )
+        )
+
+    with tx() as conn:
+        conn.execute("DELETE FROM customer_reservation_cache")
+        conn.executemany(
+            """
+            INSERT INTO customer_reservation_cache
+                (source_device, bill_number, reservation_key, item_type, school,
+                 color, size, pending_qty, updated_at, uploaded_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            cleaned,
+        )
+    return {"rows_received": len(rows), "rows_saved": len(cleaned), "uploaded_at": uploaded_at}
+
+
+def query_customer_reserved_quantity(
+    *,
+    source_device: str = "",
+    item_type: str = "",
+    school: str = "",
+    color: str = "",
+    size: str = "",
+) -> Dict[str, Any]:
+    where = ["1=1"]
+    args: List[Any] = []
+    for field, value in (
+        ("source_device", source_device),
+        ("item_type", item_type),
+        ("school", school),
+        ("color", color),
+        ("size", size),
+    ):
+        text = str(value or "").strip()
+        if text:
+            where.append(f"LOWER(TRIM({field})) = LOWER(?)")
+            args.append(text)
+    row = get_conn().execute(
+        f"""
+        SELECT COALESCE(SUM(pending_qty), 0) AS pending_qty,
+               COUNT(*) AS rows_count,
+               MAX(uploaded_at) AS uploaded_at
+          FROM customer_reservation_cache
+         WHERE {' AND '.join(where)}
+        """,
+        tuple(args),
+    ).fetchone()
+    return {
+        "pending_qty": int(row["pending_qty"] or 0),
+        "rows_count": int(row["rows_count"] or 0),
+        "uploaded_at": row["uploaded_at"],
+    }
+
+
+def check_customer_reservation(
+    *,
+    source_device: str,
+    bill_number: str,
+    item_type: str = "",
+    school: str = "",
+    color: str = "",
+    size: str = "",
+) -> Optional[Dict[str, Any]]:
+    device = str(source_device or "").strip()
+    bill = str(bill_number or "").strip()
+    if not device or not bill:
+        return None
+    where = ["source_device = ?", "bill_number = ?"]
+    args: List[Any] = [device, bill]
+    for field, value in (
+        ("item_type", item_type),
+        ("school", school),
+        ("color", color),
+        ("size", size),
+    ):
+        text = str(value or "").strip()
+        if text:
+            where.append(f"LOWER(TRIM({field})) = LOWER(?)")
+            args.append(text)
+    rows = get_conn().execute(
+        f"""
+        SELECT source_device, bill_number, item_type, school, color, size,
+               SUM(pending_qty) AS pending_qty,
+               MAX(updated_at) AS updated_at,
+               MAX(uploaded_at) AS uploaded_at
+          FROM customer_reservation_cache
+         WHERE {' AND '.join(where)}
+         GROUP BY source_device, bill_number, item_type, school, color, size
+         ORDER BY updated_at DESC
+        """,
+        tuple(args),
+    ).fetchall()
+    if not rows:
+        return None
+    total_qty = sum(int(r["pending_qty"] or 0) for r in rows)
+    first = dict(rows[0])
+    return {
+        "source_device": first["source_device"],
+        "bill_number": first["bill_number"],
+        "pending_qty": total_qty,
+        "updated_at": first["updated_at"],
+        "uploaded_at": first["uploaded_at"],
+        "items": [dict(r) for r in rows],
+    }
