@@ -565,13 +565,16 @@ def query_customer_stock(
         ("item_type", item_type),
         ("school", school),
         ("color", color),
-        ("size", size),
         ("source_device", source_device),
     ):
         text = str(value or "").strip()
         if text:
             where.append(f"LOWER(TRIM({field})) LIKE LOWER(?)")
             args.append(f"%{text}%")
+    size_text = str(size or "").strip()
+    if size_text:
+        where.append("LOWER(TRIM(size)) = LOWER(?)")
+        args.append(size_text)
     rows = get_conn().execute(
         f"""
         SELECT source_device, item_type, school, color, size, unit_price,
