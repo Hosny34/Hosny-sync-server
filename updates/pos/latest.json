@@ -26,16 +26,16 @@
     "POS/verify_pe_arch.py"
   ],
   "hashes": {
-    "package_sha256": "d6df16ce5a949878cd819ef4462f7da3779c31fd350bb88b74c742909c862ebd"
+    "package_sha256": "65ce6f1eaf654255d71030d48d6911566a3da0cea731c0384c7ef3b098dafff9"
   },
   "how_to_use": "",
   "notes": "POS update",
-  "package_file": "HosnyPOS-2026.8.2.87.zip",
-  "published_at": "2026-09-05T18:24:40Z",
+  "package_file": "HosnyPOS-2026.8.2.89.zip",
+  "published_at": "2026-09-09T14:10:14Z",
   "required_files": [
     "POS/HosnyPOS.py",
     "POS/HosnyPOS.spec",
     "POS/build_pos.bat"
   ],
-  "version": "2026.8.2.87"
+  "version": "2026.8.2.89"
 }
