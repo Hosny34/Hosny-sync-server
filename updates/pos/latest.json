@@ -26,16 +26,16 @@
     "POS/verify_pe_arch.py"
   ],
   "hashes": {
-    "package_sha256": "ebf490ae2dc71ce3ecfd2cb89b9d43476a2b40f017316bda60747ed2db0fcf90"
+    "package_sha256": "e23c11f0295dc2afb43d1a3a28a8c2a60d7203334fa3a78d6bd468f476dbeed5"
   },
   "how_to_use": "",
-  "notes": "POS update",
-  "package_file": "HosnyPOS-2026.8.2.93.zip",
-  "published_at": "2026-09-24T16:18:39Z",
+  "notes": "Authoritative reservation mirroring: every POS sync sends the complete pending reservation snapshot so Warehouse replaces stale rows from all previous device UUIDs.",
+  "package_file": "HosnyPOS-2026.8.2.94.zip",
+  "published_at": "2026-09-28T14:05:18Z",
   "required_files": [
     "POS/HosnyPOS.py",
     "POS/HosnyPOS.spec",
     "POS/build_pos.bat"
   ],
-  "version": "2026.8.2.93"
+  "version": "2026.8.2.94"
 }
