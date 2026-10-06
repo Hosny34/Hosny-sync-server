@@ -1,12 +1,13 @@
 {
   "app": "POS",
-  "example": "",
+  "example": "A branch on 2026.8.2.99 detects 2026.10.6.1 as a newer release.",
   "files": [
     "POS/Fonts/V100009_.TTF",
     "POS/HosnyPOS-win7-x64.spec",
     "POS/HosnyPOS-win7-x86.spec",
     "POS/HosnyPOS.py",
     "POS/HosnyPOS.spec",
+    "POS/branch_efficiency.py",
     "POS/build_pos.bat",
     "POS/build_pos_win7_x64.bat",
     "POS/build_pos_win7_x86.bat",
@@ -26,16 +27,16 @@
     "POS/verify_pe_arch.py"
   ],
   "hashes": {
-    "package_sha256": "e23c11f0295dc2afb43d1a3a28a8c2a60d7203334fa3a78d6bd468f476dbeed5"
+    "package_sha256": "09935f5967cd49664fa4f82c550eb87ef1f5b536b30657b6e5d39136f60c9a11"
   },
-  "how_to_use": "",
-  "notes": "Authoritative reservation mirroring: every POS sync sends the complete pending reservation snapshot so Warehouse replaces stale rows from all previous device UUIDs.",
-  "package_file": "HosnyPOS-2026.8.2.94.zip",
-  "published_at": "2026-09-28T14:05:18Z",
+  "how_to_use": "Restart POS or run its update check; the date-based release is detected through the existing numeric version comparison.",
+  "notes": "Moved releases to year.month.day.revision versioning and retained the reservation editing update.",
+  "package_file": "HosnyPOS-2026.10.6.1.zip",
+  "published_at": "2026-10-06T15:27:41Z",
   "required_files": [
     "POS/HosnyPOS.py",
     "POS/HosnyPOS.spec",
     "POS/build_pos.bat"
   ],
-  "version": "2026.8.2.94"
+  "version": "2026.10.6.1"
 }
