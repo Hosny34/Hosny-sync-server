@@ -52,6 +52,11 @@ POS_UPDATES_DIR = Path(
 # or warehouse sync token, so the WhatsApp stock path stays isolated.
 CUSTOMER_STOCK_UPLOAD_TOKEN: str = os.environ.get("CUSTOMER_STOCK_UPLOAD_TOKEN", "").strip()
 
+# Read-only credential for Mojeeb custom API tools. Keep this separate from
+# device JWTs and the customer-cache upload secret so the assistant can never
+# write sync events or replace a snapshot.
+MOJEEB_API_KEY: str = os.environ.get("MOJEEB_API_KEY", "").strip()
+
 
 def is_sqlite() -> bool:
     return DATABASE_URL.startswith("sqlite:")
