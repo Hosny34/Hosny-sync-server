@@ -12,9 +12,7 @@ Endpoints:
 from __future__ import annotations
 
 import json
-import secrets
 import time
-from functools import wraps
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional
@@ -23,24 +21,12 @@ from fastapi import Depends, FastAPI, Header, HTTPException, Query
 from fastapi.responses import FileResponse, JSONResponse
 from pydantic import BaseModel, Field
 
-from config import (
-    CUSTOMER_STOCK_UPLOAD_TOKEN,
-    MAX_PULL_BATCH,
-    MAX_PUSH_BATCH,
-    MOJEEB_API_KEY,
-    POS_UPDATES_DIR,
-)
+from config import CUSTOMER_STOCK_UPLOAD_TOKEN, MAX_PULL_BATCH, MAX_PUSH_BATCH, POS_UPDATES_DIR
 import auth
 import db
-import season_protocol
 
 
 app = FastAPI(title="HosnyWarehouse Sync Server", version="0.2.0")
-
-
-@app.exception_handler(season_protocol.ProtocolError)
-async def season_protocol_error(_request, exc):
-    return JSONResponse(status_code=409, content={'detail': str(exc)})
 
 
 def _utc_now_iso() -> str:
@@ -144,7 +130,6 @@ class CustomerStockRowIn(BaseModel):
 
 class CustomerStockUploadRequest(BaseModel):
     uploaded_at: Optional[str] = None
-    season_context: Optional[Dict[str, Any]] = None
     rows: List[CustomerStockRowIn]
 
 
@@ -162,15 +147,7 @@ class CustomerReservationRowIn(BaseModel):
 
 class CustomerReservationUploadRequest(BaseModel):
     uploaded_at: Optional[str] = None
-    season_context: Optional[Dict[str, Any]] = None
     rows: List[CustomerReservationRowIn]
-
-
-class CustomerSnapshotUploadRequest(BaseModel):
-    uploaded_at: Optional[str] = None
-    season_context: Dict[str, Any]
-    stock_rows: List[CustomerStockRowIn]
-    reservation_rows: List[CustomerReservationRowIn]
 
 
 # ------------------------------- Auth dep ------------------------------ #
@@ -197,14 +174,6 @@ def customer_stock_upload_auth(x_customer_stock_token: Optional[str] = Header(No
         raise HTTPException(status_code=503, detail="customer stock upload token is not configured")
     if (x_customer_stock_token or "").strip() != expected:
         raise HTTPException(status_code=401, detail="invalid customer stock upload token")
-
-
-def mojeeb_api_auth(x_api_key: Optional[str] = Header(None)) -> None:
-    if not MOJEEB_API_KEY:
-        raise HTTPException(status_code=503, detail="Mojeeb API is not configured")
-    supplied = (x_api_key or "").strip()
-    if not supplied or not secrets.compare_digest(supplied, MOJEEB_API_KEY):
-        raise HTTPException(status_code=401, detail="invalid API key")
 
 
 # ------------------------------- Routes -------------------------------- #
@@ -300,9 +269,6 @@ def _normalize_target_scope(scope: str, device: Dict[str, Any]) -> str:
 def sync_push(
     body: PushRequest,
     device: Dict[str, Any] = Depends(current_device),
-    x_season_protocol: Optional[int] = Header(None),
-    x_database_generation: Optional[str] = Header(None),
-    x_generation_token: Optional[str] = Header(None),
 ) -> PushResponse:
     if len(body.events) > MAX_PUSH_BATCH:
         raise HTTPException(
@@ -336,17 +302,7 @@ def sync_push(
             )
         )
 
-    with db.tx() as conn:
-        if season_protocol.enabled(conn):
-            inserted = season_protocol.append_events(conn, rows, device,
-                protocol_version=x_season_protocol, generation_id=x_database_generation,
-                secret=x_generation_token)
-        else:
-            inserted = 0
-            for row in rows:
-                cur = conn.execute('INSERT INTO events(event_uuid,event_type,source_device,target_scope,payload,created_at) '
-                                   'VALUES(?,?,?,?,?,?) ON CONFLICT(event_uuid) DO NOTHING', row)
-                inserted += cur.rowcount
+    inserted = db.insert_events(rows)
     return PushResponse(
         received=len(body.events),
         accepted=inserted,
@@ -359,18 +315,9 @@ def sync_pull(
     since: int = Query(0, ge=0),
     limit: int = Query(MAX_PULL_BATCH, ge=1, le=MAX_PULL_BATCH),
     device: Dict[str, Any] = Depends(current_device),
-    x_season_protocol: Optional[int] = Header(None),
-    x_database_generation: Optional[str] = Header(None),
-    x_generation_token: Optional[str] = Header(None),
 ) -> PullResponse:
     scopes = auth.allowed_scopes_for_pull(device["device_name"], device["role"])
-    with db.tx() as conn:
-        if season_protocol.enabled(conn):
-            rows = season_protocol.pull(conn, scopes, since, limit, device,
-                protocol_version=x_season_protocol, generation_id=x_database_generation,
-                secret=x_generation_token)
-        else:
-            rows = db.pull_events(scopes=scopes, since_seq=since, limit=limit)
+    rows = db.pull_events(scopes=scopes, since_seq=since, limit=limit)
 
     # Parse payloads back for the wire.
     events: List[Dict[str, Any]] = []
@@ -388,9 +335,6 @@ def sync_pull(
             "target_scope": r["target_scope"],
             "payload": payload_obj,
             "created_at": r["created_at"],
-            "season_origin": {key: r.get(key) for key in
-                              ('source_season_id', 'generation_id', 'target_generation_id', 'current_generation')}
-                             if 'source_season_id' in r else None,
         })
         if int(r["server_seq"]) > max_seq:
             max_seq = int(r["server_seq"])
@@ -415,9 +359,6 @@ def sync_wait(
     since: int = Query(0, ge=0),
     timeout_s: int = Query(25, ge=1, le=60),
     device: Dict[str, Any] = Depends(current_device),
-    x_season_protocol: Optional[int] = Header(None),
-    x_database_generation: Optional[str] = Header(None),
-    x_generation_token: Optional[str] = Header(None),
 ) -> WaitResponse:
     """Long-poll for new events visible to the current device.
 
@@ -427,14 +368,7 @@ def sync_wait(
     scopes = auth.allowed_scopes_for_pull(device["device_name"], device["role"])
     deadline = time.monotonic() + float(timeout_s)
     while True:
-        with db.tx() as conn:
-            if season_protocol.enabled(conn):
-                available = season_protocol.pull(conn, scopes, since, 1, device,
-                    protocol_version=x_season_protocol, generation_id=x_database_generation,
-                    secret=x_generation_token)
-                nxt = available[0]['server_seq'] if available else 0
-            else:
-                nxt = db.next_event_seq_for_scopes(scopes=scopes, since_seq=since)
+        nxt = db.next_event_seq_for_scopes(scopes=scopes, since_seq=since)
         if int(nxt) > int(since):
             return WaitResponse(
                 has_updates=True,
@@ -462,137 +396,7 @@ def sync_status(device: Dict[str, Any] = Depends(warehouse_only)) -> Dict[str, A
     }
 
 
-class SeasonChangeRequest(BaseModel):
-    operation_id: str = Field(min_length=1, max_length=128)
-    expected_revision: int = Field(ge=0)
-    action: str
-    season_id: Optional[str] = None
-    name: Optional[str] = None
-
-
-class GenerationEnrollmentRequest(BaseModel):
-    device_uuid: str
-    generation_id: str = Field(min_length=1, max_length=128)
-    secret: str = Field(min_length=32, max_length=256)
-    season_id: str
-    protocol_version: int
-
-
-class EnrollmentAuthorizationRequest(BaseModel):
-    device_uuid: str
-
-
-class EnrollmentClaimRequest(BaseModel):
-    enrollment_code: str = Field(min_length=16, max_length=256)
-    generation_id: str = Field(min_length=1, max_length=128)
-    secret: str = Field(min_length=32, max_length=256)
-    protocol_version: int
-
-
-class DefinitionBootstrapRequest(BaseModel):
-    target_scope: str
-    revision: int = Field(ge=1)
-    definitions: Dict[str, Any]
-
-
-class ApplyLeaseRequest(BaseModel):
-    lease_id: str = Field(min_length=1, max_length=128)
-    action: str
-    expected_revision: int = Field(ge=0)
-
-
-@app.post('/v1/seasons/apply-lease')
-def season_apply_lease(body: ApplyLeaseRequest, device: Dict[str, Any] = Depends(warehouse_only)):
-    with db.tx() as conn:
-        return season_protocol.apply_lease(conn, device['device_uuid'], body.lease_id,
-                                          body.action, body.expected_revision)
-
-
-@app.get('/v1/seasons/status')
-def season_status(device: Dict[str, Any] = Depends(warehouse_only)):
-    with db.tx() as conn:
-        generations, sources = season_protocol.authority(conn)
-        return {'state': season_protocol.state(conn), 'generations': generations, 'sources':sources,
-                'protocol_version': season_protocol.PROTOCOL_VERSION}
-
-
-@app.post('/v1/seasons/change')
-def season_change(body: SeasonChangeRequest, device: Dict[str, Any] = Depends(warehouse_only)):
-    with db.tx() as conn:
-        return season_protocol.change_state(conn, operation_id=body.operation_id,
-            expected_revision=body.expected_revision, action=body.action,
-            season_id=body.season_id, name=body.name)
-
-
-@app.post('/v1/seasons/enroll')
-def season_enroll(body: GenerationEnrollmentRequest, device: Dict[str, Any] = Depends(warehouse_only)):
-    with db.tx() as conn:
-        return season_protocol.enroll(conn, device_uuid=body.device_uuid,
-            generation_id=body.generation_id, secret=body.secret, season_id=body.season_id,
-            protocol_version=body.protocol_version)
-
-
-@app.post('/v1/seasons/authorize-enrollment')
-def season_authorize_enrollment(body: EnrollmentAuthorizationRequest,
-                                device: Dict[str, Any] = Depends(warehouse_only)):
-    with db.tx() as conn:
-        return season_protocol.authorize_enrollment(conn, device_uuid=body.device_uuid)
-
-
-@app.post('/v1/seasons/claim')
-def season_claim(body: EnrollmentClaimRequest, device: Dict[str, Any] = Depends(current_device)):
-    if device['role'] != 'pos':
-        raise HTTPException(status_code=403, detail='POS identity required')
-    with db.tx() as conn:
-        return season_protocol.claim_enrollment(conn, device_uuid=device['device_uuid'],
-            enrollment_code=body.enrollment_code,generation_id=body.generation_id,
-            secret=body.secret,protocol_version=body.protocol_version)
-
-
-@app.get('/v1/seasons/client-status')
-def season_client_status(device: Dict[str, Any] = Depends(current_device)):
-    with db.tx() as conn:
-        return season_protocol.client_status(conn,device['device_uuid'])
-
-
-@app.post('/v1/seasons/definitions')
-def season_definitions(body: DefinitionBootstrapRequest, device: Dict[str, Any] = Depends(warehouse_only)):
-    with db.tx() as conn:
-        season_protocol.publish_definitions(conn, body.target_scope, body.revision, body.definitions)
-    return {'revision': body.revision}
-
-
-@app.get('/v1/seasons/bootstrap')
-def season_bootstrap(device: Dict[str, Any] = Depends(current_device),
-                     x_season_protocol: Optional[int] = Header(None),
-                     x_database_generation: Optional[str] = Header(None),
-                     x_generation_token: Optional[str] = Header(None)):
-    with db.tx() as conn:
-        return season_protocol.bootstrap(conn, device, x_database_generation,
-                                         x_generation_token, x_season_protocol)
-
-
-def customer_cache_read(fn):
-    @wraps(fn)
-    def read(*args, **kwargs):
-        with db.customer_cache_read_lock():
-            return fn(*args, **kwargs)
-    return read
-
-
-@app.post('/v1/customer/snapshot/upload', dependencies=[Depends(customer_stock_upload_auth)])
-def customer_snapshot_upload(body: CustomerSnapshotUploadRequest) -> Dict[str, Any]:
-    result = db.replace_customer_snapshot(
-        [row.model_dump() for row in body.stock_rows],
-        [row.model_dump() for row in body.reservation_rows],
-        (body.uploaded_at or '').strip() or _utc_now_iso(),
-        season_context=body.season_context,
-    )
-    return {'server_time': _utc_now_iso(), **result}
-
-
 @app.get("/v1/customer/stock")
-@customer_cache_read
 def customer_stock(
     source_device: str = "",
     item_type: str = "",
@@ -618,7 +422,6 @@ def customer_stock(
 
 
 @app.get("/v1/customer/known-values")
-@customer_cache_read
 def customer_known_values(
     field: str,
     source_device: str = "",
@@ -652,12 +455,11 @@ def customer_stock_upload(body: CustomerStockUploadRequest) -> Dict[str, Any]:
         r.model_dump() if hasattr(r, "model_dump") else r.dict()
         for r in body.rows
     ]
-    result = db.replace_customer_stock(rows, uploaded_at, season_context=body.season_context)
+    result = db.replace_customer_stock(rows, uploaded_at)
     return {"ok": True, "server_time": _utc_now_iso(), **result}
 
 
 @app.get("/v1/customer/reservations/summary")
-@customer_cache_read
 def customer_reservations_summary(
     source_device: str = "",
     item_type: str = "",
@@ -678,7 +480,6 @@ def customer_reservations_summary(
 
 
 @app.get("/v1/customer/reservations/check")
-@customer_cache_read
 def customer_reservations_check(
     source_device: str,
     bill_number: str,
@@ -700,62 +501,6 @@ def customer_reservations_check(
     return {"server_time": _utc_now_iso(), **row}
 
 
-@app.get("/v1/mojeeb/branches", dependencies=[Depends(mojeeb_api_auth)])
-@customer_cache_read
-def mojeeb_branches() -> Dict[str, Any]:
-    """Return only branch identifiers represented in the current live cache."""
-    return {
-        "server_time": _utc_now_iso(),
-        "branches": db.query_mojeeb_branches(),
-    }
-
-
-@app.get("/v1/mojeeb/stock", dependencies=[Depends(mojeeb_api_auth)])
-@customer_cache_read
-def mojeeb_stock(
-    branch: str = "",
-    item_type: str = "",
-    school: str = "",
-    color: str = "",
-    size: str = "",
-    limit: int = Query(20, ge=1, le=50),
-) -> Dict[str, Any]:
-    """Customer-safe stock, prices, and availability after reservations."""
-    rows = db.query_mojeeb_stock(
-        source_device=branch,
-        item_type=item_type,
-        school=school,
-        color=color,
-        size=size,
-        limit=limit,
-    )
-    return {
-        "server_time": _utc_now_iso(),
-        "matches": len(rows),
-        "rows": rows,
-    }
-
-
-@app.get("/v1/mojeeb/reservation", dependencies=[Depends(mojeeb_api_auth)])
-@customer_cache_read
-def mojeeb_reservation(
-    branch: str,
-    bill_number: str,
-) -> Dict[str, Any]:
-    """Look up one branch reservation without exposing customer information."""
-    row = db.check_customer_reservation(
-        source_device=branch,
-        bill_number=bill_number,
-    )
-    if not row:
-        return {
-            "server_time": _utc_now_iso(),
-            "found": False,
-            "message": "No active reservation matched this branch and bill number.",
-        }
-    return {"server_time": _utc_now_iso(), "found": True, **row}
-
-
 @app.post("/v1/customer/reservations/upload", dependencies=[Depends(customer_stock_upload_auth)])
 def customer_reservations_upload(body: CustomerReservationUploadRequest) -> Dict[str, Any]:
     uploaded_at = (body.uploaded_at or "").strip() or _utc_now_iso()
@@ -763,7 +508,7 @@ def customer_reservations_upload(body: CustomerReservationUploadRequest) -> Dict
         r.model_dump() if hasattr(r, "model_dump") else r.dict()
         for r in body.rows
     ]
-    result = db.replace_customer_reservations(rows, uploaded_at, season_context=body.season_context)
+    result = db.replace_customer_reservations(rows, uploaded_at)
     return {"ok": True, "server_time": _utc_now_iso(), **result}
 
 

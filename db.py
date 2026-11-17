@@ -18,7 +18,7 @@ from __future__ import annotations
 
 import sqlite3
 import threading
-from contextlib import contextmanager, nullcontext
+from contextlib import contextmanager
 from typing import Any, Dict, Iterable, List, Optional, Tuple
 
 from config import is_sqlite, sqlite_path
@@ -139,11 +139,6 @@ def init_schema() -> None:
             ON customer_reservation_cache(source_device, bill_number);
         """
     )
-
-
-    import season_protocol
-    with tx() as season_conn:
-        season_protocol.initialize(season_conn)
 
 
 # ---- Devices ----
@@ -429,9 +424,6 @@ def reset_device_state(device_name: str, target_scope: str) -> Dict[str, Any]:
     )
 
     with tx() as tx_conn:
-        import season_protocol
-        if season_protocol.enabled(tx_conn):
-            raise season_protocol.ProtocolError('Use generation enrollment; legacy reset would erase seasonal history')
         if device_uuid:
             tx_conn.execute(
                 "DELETE FROM events WHERE source_device = ? OR target_scope = ?",
@@ -467,9 +459,6 @@ def reset_all_state() -> Dict[str, Any]:
     cursors_deleted = int(conn.execute("SELECT COUNT(*) FROM device_cursors").fetchone()[0] or 0)
     devices_deleted = int(conn.execute("SELECT COUNT(*) FROM devices").fetchone()[0] or 0)
     with tx() as tx_conn:
-        import season_protocol
-        if season_protocol.enabled(tx_conn):
-            raise season_protocol.ProtocolError('Legacy reset is disabled for a managed season store')
         tx_conn.execute("DELETE FROM events")
         tx_conn.execute("DELETE FROM device_cursors")
         tx_conn.execute("DELETE FROM devices")
@@ -483,27 +472,7 @@ def reset_all_state() -> Dict[str, Any]:
 
 # ---- Customer stock cache ----
 
-
-@contextmanager
-def customer_cache_read_lock():
-    """Keep public reads outside a concurrent replacement on the shared connection."""
-    with _lock:
-        yield
-
-
-def replace_customer_snapshot(stock_rows, reservation_rows, uploaded_at, *, season_context):
-    """Publish both managed read models and their version markers atomically."""
-    import season_protocol
-    with tx() as conn:
-        if not season_protocol.enabled(conn):
-            raise season_protocol.ProtocolError('Managed cache publication requires an active season')
-        stock = replace_customer_stock(stock_rows, uploaded_at,
-                                       season_context=season_context, _conn=conn)
-        reservations = replace_customer_reservations(reservation_rows, uploaded_at,
-                                                     season_context=season_context, _conn=conn)
-        return {'ok': True, 'stock': stock, 'reservations': reservations}
-
-def replace_customer_stock(rows: List[Dict[str, Any]], uploaded_at: str, *, season_context=None, _conn=None) -> Dict[str, Any]:
+def replace_customer_stock(rows: List[Dict[str, Any]], uploaded_at: str) -> Dict[str, Any]:
     """Replace the customer-facing stock cache.
 
     This is intentionally separate from the sync event log. The WhatsApp bot
@@ -539,12 +508,7 @@ def replace_customer_stock(rows: List[Dict[str, Any]], uploaded_at: str, *, seas
             )
         )
 
-    with (tx() if _conn is None else nullcontext(_conn)) as conn:
-        import season_protocol
-        if _conn is None and season_protocol.enabled(conn):
-            raise season_protocol.ProtocolError('Managed caches must be published together')
-        if not season_protocol.authorize_customer_cache(conn, 'stock', season_context, rows):
-            return {"rows_received": len(rows), "rows_saved": len(cleaned), "uploaded_at": uploaded_at, "duplicate": True}
+    with tx() as conn:
         conn.execute("DELETE FROM customer_stock_cache")
         conn.executemany(
             """
@@ -656,105 +620,9 @@ def query_customer_stock(
     return [dict(r) for r in rows]
 
 
-def query_mojeeb_branches() -> List[Dict[str, Any]]:
-    rows = get_conn().execute(
-        """
-        SELECT source_device,
-               SUM(CASE WHEN count > 0 THEN count ELSE 0 END) AS physical_count,
-               MAX(uploaded_at) AS last_updated
-          FROM customer_stock_cache
-         GROUP BY source_device
-         ORDER BY source_device
-        """
-    ).fetchall()
-    return [
-        {
-            "branch": str(row["source_device"]),
-            "physical_count": int(row["physical_count"] or 0),
-            "last_updated": row["last_updated"],
-        }
-        for row in rows
-    ]
-
-
-def query_mojeeb_stock(
-    *,
-    source_device: str = "",
-    item_type: str = "",
-    school: str = "",
-    color: str = "",
-    size: str = "",
-    limit: int = 20,
-) -> List[Dict[str, Any]]:
-    """Return the narrow customer-facing stock model used by Mojeeb."""
-    where = ["1=1"]
-    args: List[Any] = []
-    for field, value in (
-        ("source_device", source_device),
-        ("item_type", item_type),
-        ("school", school),
-        ("color", color),
-    ):
-        text = str(value or "").strip()
-        if text:
-            where.append(f"LOWER(TRIM(s.{field})) LIKE LOWER(?)")
-            args.append(f"%{text}%")
-    size_text = str(size or "").strip()
-    if size_text:
-        where.append("LOWER(TRIM(s.size)) = LOWER(?)")
-        args.append(size_text)
-    rows = get_conn().execute(
-        f"""
-        WITH stock AS (
-            SELECT source_device, item_type, school, color, size, unit_price,
-                   SUM(CASE WHEN count > 0 THEN count ELSE 0 END) AS physical_count,
-                   MAX(uploaded_at) AS last_updated
-              FROM customer_stock_cache
-             GROUP BY source_device, item_type, school, color, size, unit_price
-        ), reserved AS (
-            SELECT source_device, item_type, school, color, size,
-                   SUM(CASE WHEN pending_qty > 0 THEN pending_qty ELSE 0 END) AS reserved_count
-              FROM customer_reservation_cache
-             GROUP BY source_device, item_type, school, color, size
-        )
-        SELECT s.source_device AS branch, s.item_type, s.school, s.color, s.size,
-               s.unit_price, s.physical_count,
-               COALESCE(r.reserved_count, 0) AS reserved_count,
-               MAX(0, s.physical_count - COALESCE(r.reserved_count, 0)) AS available_count,
-               s.last_updated
-          FROM stock s
-          LEFT JOIN reserved r
-            ON r.source_device = s.source_device
-           AND r.item_type = s.item_type
-           AND r.school = s.school
-           AND r.color = s.color
-           AND r.size = s.size
-         WHERE {' AND '.join(where)}
-         ORDER BY s.school, s.item_type, s.color, s.size, s.unit_price, s.source_device
-         LIMIT ?
-        """,
-        (*args, int(limit)),
-    ).fetchall()
-    return [
-        {
-            "branch": row["branch"],
-            "item_type": row["item_type"],
-            "school": row["school"],
-            "color": row["color"],
-            "size": row["size"],
-            "price": float(row["unit_price"] or 0),
-            "physical_count": int(row["physical_count"] or 0),
-            "reserved_count": int(row["reserved_count"] or 0),
-            "available_count": int(row["available_count"] or 0),
-            "last_updated": row["last_updated"],
-        }
-        for row in rows
-    ]
-
-
 # ---- Customer reservation cache ----
 
-def replace_customer_reservations(rows: List[Dict[str, Any]], uploaded_at: str, *, season_context=None, _conn=None) -> Dict[str, Any]:
+def replace_customer_reservations(rows: List[Dict[str, Any]], uploaded_at: str) -> Dict[str, Any]:
     """Replace the customer-facing pending-reservation cache.
 
     This read model is used only by the WhatsApp bot to reduce displayed
@@ -794,12 +662,7 @@ def replace_customer_reservations(rows: List[Dict[str, Any]], uploaded_at: str, 
             )
         )
 
-    with (tx() if _conn is None else nullcontext(_conn)) as conn:
-        import season_protocol
-        if _conn is None and season_protocol.enabled(conn):
-            raise season_protocol.ProtocolError('Managed caches must be published together')
-        if not season_protocol.authorize_customer_cache(conn, 'reservations', season_context, rows):
-            return {"rows_received": len(rows), "rows_saved": len(cleaned), "uploaded_at": uploaded_at, "duplicate": True}
+    with tx() as conn:
         conn.execute("DELETE FROM customer_reservation_cache")
         conn.executemany(
             """

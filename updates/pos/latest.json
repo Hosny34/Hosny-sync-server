@@ -1,13 +1,12 @@
 {
   "app": "POS",
-  "example": "",
+  "example": "A branch on 2026.8.2.99 detects 2026.10.6.1 as a newer release.",
   "files": [
     "POS/Fonts/V100009_.TTF",
     "POS/HosnyPOS-win7-x64.spec",
     "POS/HosnyPOS-win7-x86.spec",
     "POS/HosnyPOS.py",
     "POS/HosnyPOS.spec",
-    "POS/bill_identity.py",
     "POS/branch_efficiency.py",
     "POS/build_pos.bat",
     "POS/build_pos_win7_x64.bat",
@@ -19,8 +18,6 @@
     "POS/pos_version.py",
     "POS/requirements-win7-x64.txt",
     "POS/requirements-win7-x86.txt",
-    "POS/season_definitions.py",
-    "POS/season_identity.py",
     "POS/sync_appliers.py",
     "POS/sync_client.py",
     "POS/sync_core.py",
@@ -30,16 +27,16 @@
     "POS/verify_pe_arch.py"
   ],
   "hashes": {
-    "package_sha256": "f92abf92ce1ff1fd548fb6d6b61b76fcc6b4605c4bb47677a0a362860f2759bd"
+    "package_sha256": "09935f5967cd49664fa4f82c550eb87ef1f5b536b30657b6e5d39136f60c9a11"
   },
-  "how_to_use": "",
-  "notes": "????? ???? ???????",
-  "package_file": "HosnyPOS-2026.11.17.1.zip",
-  "published_at": "2026-11-17T15:37:58Z",
+  "how_to_use": "Restart POS or run its update check; the date-based release is detected through the existing numeric version comparison.",
+  "notes": "Moved releases to year.month.day.revision versioning and retained the reservation editing update.",
+  "package_file": "HosnyPOS-2026.10.6.1.zip",
+  "published_at": "2026-10-06T15:27:41Z",
   "required_files": [
     "POS/HosnyPOS.py",
     "POS/HosnyPOS.spec",
     "POS/build_pos.bat"
   ],
-  "version": "2026.11.17.1"
+  "version": "2026.10.6.1"
 }
