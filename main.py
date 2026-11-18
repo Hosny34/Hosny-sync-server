@@ -12,6 +12,7 @@ Endpoints:
 from __future__ import annotations
 
 import json
+import os
 import time
 from datetime import datetime, timezone
 from pathlib import Path
@@ -27,6 +28,15 @@ import db
 
 
 app = FastAPI(title="HosnyWarehouse Sync Server", version="0.2.0")
+
+
+def _require_sync_ready() -> None:
+    if os.environ.get("SYNC_MAINTENANCE", "").strip() == "1":
+        raise HTTPException(
+            status_code=503,
+            detail="Sync temporarily paused for database recovery; retry later.",
+            headers={"Retry-After": "60"},
+        )
 
 
 def _utc_now_iso() -> str:
@@ -270,6 +280,7 @@ def sync_push(
     body: PushRequest,
     device: Dict[str, Any] = Depends(current_device),
 ) -> PushResponse:
+    _require_sync_ready()
     if len(body.events) > MAX_PUSH_BATCH:
         raise HTTPException(
             status_code=413,
@@ -316,6 +327,7 @@ def sync_pull(
     limit: int = Query(MAX_PULL_BATCH, ge=1, le=MAX_PULL_BATCH),
     device: Dict[str, Any] = Depends(current_device),
 ) -> PullResponse:
+    _require_sync_ready()
     scopes = auth.allowed_scopes_for_pull(device["device_name"], device["role"])
     rows = db.pull_events(scopes=scopes, since_seq=since, limit=limit)
 
@@ -365,6 +377,7 @@ def sync_wait(
     Returns immediately when a matching event is available, otherwise
     waits up to `timeout_s` and returns `has_updates=false`.
     """
+    _require_sync_ready()
     scopes = auth.allowed_scopes_for_pull(device["device_name"], device["role"])
     deadline = time.monotonic() + float(timeout_s)
     while True:
